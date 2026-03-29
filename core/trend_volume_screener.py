@@ -450,11 +450,17 @@ class TrendVolumeScreener:
         }
     
     def analyze_three_day_performance(self, df: pd.DataFrame) -> Dict:
-        """分析三天表现"""
-        if len(df) < 3:
+        """分析最近三天表现
+        说明：
+        - 三天涨幅 = 今天收盘价 相对 3 个交易日前收盘价 的涨跌幅
+        - 十日涨幅 = 今天收盘价 相对 10 个交易日前收盘价 的涨跌幅
+        这样统计的才是完整区间涨幅，而不是少算一天。
+        """
+        if len(df) < 4:
             return {}
         
-        recent = df.iloc[-10:].copy()  # 看最近10天
+        # 至少保留11天，便于正确计算10日涨幅（需要取到10个交易日前的收盘价）
+        recent = df.iloc[-11:].copy()
         recent = recent.reset_index(drop=True)
         
         # 计算量能指标
@@ -462,28 +468,28 @@ class TrendVolumeScreener:
         recent['volume_ratio'] = recent['volume'] / recent['vol_ma5']
         recent['change_pct'] = recent['close'].pct_change() * 100
         
-        # 分析最近三天
+        # 分析最近三天（这3天分别对应 3 个单日涨跌幅）
         last_3 = recent.iloc[-3:]
         
-        # 三天涨幅
-        start_price = last_3.iloc[0]['close']
-        end_price = last_3.iloc[-1]['close']
+        # 三天累计涨幅：从3个交易日前收盘价算到今天收盘价
+        start_price = recent.iloc[-4]['close']
+        end_price = recent.iloc[-1]['close']
         three_day_change = (end_price - start_price) / start_price * 100
         
-        # 上涨天数
-        up_days = sum(last_3['change_pct'] > 0)
+        # 上涨天数：最近3个交易日中上涨的天数
+        up_days = int((last_3['change_pct'] > 0).sum())
         
         # 是否连续上涨
-        consecutive_up = all(last_3['change_pct'] > 0)
+        consecutive_up = bool((last_3['change_pct'] > 0).all())
         
         # 量能分析
         avg_volume_ratio = last_3['volume_ratio'].mean()
-        consecutive_volume = all(last_3['volume_ratio'] > 1.0)
+        consecutive_volume = bool((last_3['volume_ratio'] > 1.0).all())
         volume_increasing = last_3['volume_ratio'].iloc[-1] > last_3['volume_ratio'].iloc[0]
         
-        # 十日涨幅（风险控制）
-        if len(recent) >= 10:
-            start_price_10 = recent.iloc[-10]['close']
+        # 十日涨幅（风险控制）：从10个交易日前收盘价算到今天收盘价
+        if len(recent) >= 11:
+            start_price_10 = recent.iloc[-11]['close']
             end_price_10 = recent.iloc[-1]['close']
             ten_day_change = (end_price_10 - start_price_10) / start_price_10 * 100
         else:
