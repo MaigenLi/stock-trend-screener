@@ -344,6 +344,110 @@ class TrendVolumeScreener:
         
         return False
     
+    def _get_latest_trading_day_info(self, code: str) -> Dict:
+        """通过网络查询获取最近一个交易日的成交量信息
+        使用新浪财经接口获取实时或最近交易日数据
+        使用线程超时控制，避免阻塞主程序
+        """
+        import threading
+        import queue
+        
+        result_queue = queue.Queue()
+        
+        def _fetch_data():
+            """实际获取数据的函数"""
+            import requests
+            from requests.exceptions import Timeout, ConnectionError
+            
+            try:
+                # 转换股票代码格式
+                if code.startswith('sh'):
+                    api_code = f'sh{code[2:]}'
+                elif code.startswith('sz'):
+                    api_code = f'sz{code[2:]}'
+                else:
+                    if code.startswith('6'):
+                        api_code = f'sh{code}'
+                    else:
+                        api_code = f'sz{code}'
+                
+                url = f'http://hq.sinajs.cn/list={api_code}'
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'http://finance.sina.com.cn/',
+                }
+                
+                # 使用非常短的超时
+                response = requests.get(url, headers=headers, timeout=1.5, verify=False)
+                
+                if response.status_code == 200 and response.text:
+                    content = response.text.strip()
+                    if '="' in content:
+                        data_str = content.split('="')[1].rstrip('";')
+                        fields = data_str.split(',')
+                        
+                        if len(fields) >= 9:
+                            stock_name = fields[0]
+                            volume_str = fields[8]  # 成交量(手)
+                            
+                            try:
+                                volume = float(volume_str) * 100  # 转换为股数
+                                current_price = float(fields[3]) if fields[3] else 0
+                                
+                                result_queue.put({
+                                    'success': True,
+                                    'stock_name': stock_name,
+                                    'current_price': current_price,
+                                    'volume': volume,
+                                    'is_suspended': volume <= 0 or current_price <= 0,
+                                    'source': 'sina_realtime'
+                                })
+                                return
+                            except ValueError:
+                                pass
+            except Timeout:
+                result_queue.put({
+                    'success': False,
+                    'error': '请求超时',
+                    'is_suspended': False
+                })
+                return
+            except ConnectionError:
+                result_queue.put({
+                    'success': False,
+                    'error': '连接失败',
+                    'is_suspended': False
+                })
+                return
+            except Exception:
+                pass
+            
+            # 默认返回失败
+            result_queue.put({
+                'success': False,
+                'error': '网络查询失败',
+                'is_suspended': False
+            })
+        
+        # 启动线程获取数据
+        thread = threading.Thread(target=_fetch_data)
+        thread.daemon = True
+        thread.start()
+        
+        # 等待结果，最多2秒
+        thread.join(timeout=2)
+        
+        # 检查是否有结果
+        try:
+            return result_queue.get_nowait()
+        except queue.Empty:
+            # 线程超时，返回超时结果
+            return {
+                'success': False,
+                'error': '线程超时',
+                'is_suspended': False
+            }
+    
     def _get_data_delay_info(self, df: pd.DataFrame) -> Dict:
         """获取数据延迟信息"""
         if df is None or df.empty:
@@ -568,9 +672,20 @@ class TrendVolumeScreener:
         # 获取数据延迟信息
         delay_info = self._get_data_delay_info(raw_df)
         
-        # 0. 排除"当天停牌"股票（基于历史数据判断）
-        if self._is_suspended_today(raw_df, max_delay_days=5):
-            return None
+        # 0. 排除"当天停牌"股票
+        # 优先使用网络查询判断最近交易日是否停牌
+        latest_info = self._get_latest_trading_day_info(code)
+        
+        if latest_info.get('success', False):
+            # 网络查询成功，使用实时数据判断
+            if latest_info.get('is_suspended', False):
+                return None
+            # 网络查询成功且未停牌，继续后续筛选
+        else:
+            # 网络查询失败，使用离线数据判断
+            # 注意：网络失败不直接视为停牌，因为可能是网络问题
+            if self._is_suspended_today(raw_df, max_delay_days=5):
+                return None
         
         # 后续分析仍只使用有成交量的数据，避免停牌日干扰均线/量能
         df = raw_df[raw_df['volume'] > 0].copy().reset_index(drop=True)
@@ -1122,8 +1237,8 @@ def main():
                        help='最小上涨天数(3天内) (默认: 2)')
     
     # 量能参数
-    parser.add_argument('--min-volume-ratio', type=float, default=1.5,
-                       help='最小平均量比 (默认: 1.5)')
+    parser.add_argument('--min-volume-ratio', type=float, default=1.2,
+                       help='最小平均量比 (默认: 1.2)')
     parser.add_argument('--consecutive-volume', action='store_true', default=False,
                        help='要求连续三天放量 (默认: False)')
     
