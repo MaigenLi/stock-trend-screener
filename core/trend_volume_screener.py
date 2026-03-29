@@ -1023,8 +1023,8 @@ def main():
                        help='最小上升趋势天数 (默认: 5)')
     
     # 三天表现参数
-    parser.add_argument('--min-three-day', type=float, default=3.0,
-                       help='最小三天涨幅(%) (默认: 3.0)')
+    parser.add_argument('--min-three-day', type=float, default=8.0,
+                       help='最小三天涨幅(%) (默认: 8.0)')
     parser.add_argument('--max-three-day', type=float, default=30.0,
                        help='最大三天涨幅(%) (默认: 30.0)')
     parser.add_argument('--min-up-days', type=int, default=2,
@@ -1064,7 +1064,7 @@ def main():
         'price_above': 'ma5',
         'ma_trend': True,
         'min_trend_days': 5,
-        'min_three_day': 3.0,
+        'min_three_day': 8.0,
         'max_three_day': 30.0,
         'min_up_days': 2,
         'min_volume_ratio': 1.0,
