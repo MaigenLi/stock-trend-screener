@@ -310,24 +310,57 @@ class TrendVolumeScreener:
         # 两种条件都满足才认为是真正的上涨
         return simple_rising and trend_rising
     
-    def _is_suspended_today(self, df: pd.DataFrame) -> bool:
-        """判断最新一日是否停牌
-        规则尽量保守：
-        - 最新日成交量 <= 0 视为停牌/未成交
-        - 价格无效（收盘价<=0）也直接排除
+    def _is_suspended_today(self, df: pd.DataFrame, max_delay_days: int = 5) -> bool:
+        """判断股票是否应视为"当天停牌"
+        规则：
+        1. 数据为空或无效 → 停牌
+        2. 最新日成交量 <= 0 → 停牌
+        3. 数据过时（超过max_delay_days未更新）→ 视为可能停牌
+        注意：通达信离线数据不是实时的，只能基于历史数据判断
         """
         if df is None or df.empty:
             return True
         
         latest = df.iloc[-1]
         
+        # 1. 价格无效
         if pd.isna(latest['close']) or latest['close'] <= 0:
             return True
         
+        # 2. 成交量无效
         if pd.isna(latest['volume']) or latest['volume'] <= 0:
             return True
         
+        # 3. 检查数据是否过时（通达信数据可能不是最新的）
+        try:
+            latest_date = latest['date']
+            if isinstance(latest_date, pd.Timestamp):
+                days_delay = (pd.Timestamp.now() - latest_date).days
+                if days_delay > max_delay_days:
+                    # 数据过时，可能停牌或数据未更新
+                    return True
+        except:
+            pass
+        
         return False
+    
+    def _get_data_delay_info(self, df: pd.DataFrame) -> Dict:
+        """获取数据延迟信息"""
+        if df is None or df.empty:
+            return {'delay_days': None, 'latest_date': None, 'is_delayed': True}
+        
+        latest = df.iloc[-1]
+        latest_date = latest['date'] if 'date' in latest else None
+        
+        if latest_date and isinstance(latest_date, pd.Timestamp):
+            delay_days = (pd.Timestamp.now() - latest_date).days
+            return {
+                'delay_days': delay_days,
+                'latest_date': latest_date.strftime('%Y-%m-%d'),
+                'is_delayed': delay_days > 5
+            }
+        
+        return {'delay_days': None, 'latest_date': None, 'is_delayed': True}
     
     def _cache_stock_name(self, code: str, name: str):
         """缓存股票名称到本地文件"""
@@ -532,8 +565,11 @@ class TrendVolumeScreener:
         if raw_df is None or len(raw_df) < 61:
             return None
         
-        # 0. 排除当天停牌股票
-        if self._is_suspended_today(raw_df):
+        # 获取数据延迟信息
+        delay_info = self._get_data_delay_info(raw_df)
+        
+        # 0. 排除"当天停牌"股票（基于历史数据判断）
+        if self._is_suspended_today(raw_df, max_delay_days=5):
             return None
         
         # 后续分析仍只使用有成交量的数据，避免停牌日干扰均线/量能
@@ -665,6 +701,10 @@ class TrendVolumeScreener:
             'ma5': trend_analysis['ma5'],
             'ma10': trend_analysis['ma10'],
             'ma20': trend_analysis['ma20'],
+            # 数据延迟信息（通达信数据不是实时的）
+            'data_delay_days': delay_info.get('delay_days'),
+            'data_latest_date': delay_info.get('latest_date'),
+            'is_data_delayed': delay_info.get('is_delayed', True),
         }
     
     def calculate_score(self, trend_analysis: Dict, three_day_analysis: Dict) -> float:
@@ -836,6 +876,15 @@ class TrendVolumeScreener:
         print("🎯 筛选结果")
         print("=" * 80)
         
+        # 检查数据延迟情况
+        delayed_stocks = [s for s in stocks if s.get('is_data_delayed', False)]
+        if delayed_stocks:
+            avg_delay = np.mean([s.get('data_delay_days', 0) for s in delayed_stocks if s.get('data_delay_days')])
+            print(f"⚠️  注意：基于通达信离线数据筛选（非实时）")
+            print(f"   数据延迟: 平均 {avg_delay:.0f} 天，最新数据日期: {delayed_stocks[0].get('data_latest_date', '未知')}")
+            print(f"   筛选结果是历史数据表现，不代表当前市场状态")
+            print()
+        
         # 显示前30只
         display_count = min(30, len(stocks))
         
@@ -898,7 +947,13 @@ class TrendVolumeScreener:
             main_sector = stock.get('main_sector', '未知')
             sector_category = stock.get('sector_category', '其他')
             
-            print(f"{i:3d}. {stock['code']} {stock['name']} (评分:{stock['score']:.1f})")
+            # 数据延迟标记
+            delay_marker = ""
+            if stock.get('is_data_delayed', False):
+                delay_days = stock.get('data_delay_days', 0)
+                delay_marker = f" ⏰{delay_days}d"
+            
+            print(f"{i:3d}. {stock['code']} {stock['name']} (评分:{stock['score']:.1f}){delay_marker}")
             print(f"     价格: {stock['latest_price']:7.2f} ({stock['latest_change']:+.2f}%)")
             print(f"     三天: {stock['three_day_change']:+.2f}% ({stock['up_days']}/3上涨)")
             print(f"     量比: {stock['avg_volume_ratio']:.2f} {volume_desc}")
