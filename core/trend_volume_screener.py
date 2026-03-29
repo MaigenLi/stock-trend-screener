@@ -140,7 +140,9 @@ class TrendVolumeScreener:
             df['date'] = pd.to_datetime(df['date_int'].astype(str))
             df = df.sort_values("date").reset_index(drop=True)
             
-            df = df[(df['close'] > 0) & (df['volume'] > 0)]
+            # 保留原始日线，后续单独判断“最新交易日是否停牌”
+            # 注意：这里不能提前过滤 volume == 0，否则当天停牌股票会被误判成“上一交易日正常交易”。
+            df = df[df['close'] > 0]
             return df
             
         except Exception:
@@ -307,6 +309,25 @@ class TrendVolumeScreener:
         
         # 两种条件都满足才认为是真正的上涨
         return simple_rising and trend_rising
+    
+    def _is_suspended_today(self, df: pd.DataFrame) -> bool:
+        """判断最新一日是否停牌
+        规则尽量保守：
+        - 最新日成交量 <= 0 视为停牌/未成交
+        - 价格无效（收盘价<=0）也直接排除
+        """
+        if df is None or df.empty:
+            return True
+        
+        latest = df.iloc[-1]
+        
+        if pd.isna(latest['close']) or latest['close'] <= 0:
+            return True
+        
+        if pd.isna(latest['volume']) or latest['volume'] <= 0:
+            return True
+        
+        return False
     
     def _cache_stock_name(self, code: str, name: str):
         """缓存股票名称到本地文件"""
@@ -507,8 +528,17 @@ class TrendVolumeScreener:
     
     def evaluate_stock(self, code: str) -> Optional[Dict]:
         """评估单只股票"""
-        df = self.read_tdx_day(code)
-        if df is None or len(df) < 61:  # 需要至少61天数据来计算MA60
+        raw_df = self.read_tdx_day(code)
+        if raw_df is None or len(raw_df) < 61:
+            return None
+        
+        # 0. 排除当天停牌股票
+        if self._is_suspended_today(raw_df):
+            return None
+        
+        # 后续分析仍只使用有成交量的数据，避免停牌日干扰均线/量能
+        df = raw_df[raw_df['volume'] > 0].copy().reset_index(drop=True)
+        if len(df) < 61:  # 需要至少61天有效交易数据来计算MA60
             return None
         
         # 获取股票名称
@@ -1037,8 +1067,8 @@ def main():
                        help='最小上涨天数(3天内) (默认: 2)')
     
     # 量能参数
-    parser.add_argument('--min-volume-ratio', type=float, default=1.0,
-                       help='最小平均量比 (默认: 1.0)')
+    parser.add_argument('--min-volume-ratio', type=float, default=1.5,
+                       help='最小平均量比 (默认: 1.5)')
     parser.add_argument('--consecutive-volume', action='store_true', default=False,
                        help='要求连续三天放量 (默认: False)')
     
@@ -1069,8 +1099,8 @@ def main():
     default_args = {
         'price_above': 'ma5',
         'ma_trend': True,
-        'min_trend_days': 5,
-        'min_three_day': 8.0,
+        'min_trend_days': 8,
+        'min_three_day': 5.0,
         'max_three_day': 30.0,
         'min_up_days': 2,
         'min_volume_ratio': 1.0,
