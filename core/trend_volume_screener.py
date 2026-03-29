@@ -261,6 +261,53 @@ class TrendVolumeScreener:
         
         return "未知"
     
+    def _is_st_stock(self, stock_name: str) -> bool:
+        """判断是否为ST股票"""
+        if not stock_name:
+            return False
+        
+        # 检查是否包含ST标识
+        st_keywords = ['ST', '*ST', 'st', '*st', '退市']
+        for keyword in st_keywords:
+            if keyword in stock_name:
+                return True
+        
+        return False
+    
+    def _is_ma60_rising(self, df: pd.DataFrame, lookback_days: int = 5) -> bool:
+        """判断60日均线是否上涨
+        参数:
+            df: 股票数据DataFrame
+            lookback_days: 查看最近多少天的MA60趋势，默认5天
+        """
+        if len(df) < 60 + lookback_days:
+            return False
+        
+        # 计算MA60
+        df['ma60'] = df['close'].rolling(60).mean()
+        
+        # 获取最近lookback_days天的MA60值
+        ma60_values = df['ma60'].iloc[-lookback_days:].values
+        
+        # 检查是否有NaN值
+        if any(pd.isna(v) for v in ma60_values):
+            return False
+        
+        # 方法1: 简单检查 - 当前MA60是否大于前一天的MA60
+        simple_rising = ma60_values[-1] > ma60_values[-2]
+        
+        # 方法2: 趋势检查 - 最近lookback_days天的MA60是否整体呈上升趋势
+        # 计算线性回归斜率
+        x = np.arange(len(ma60_values))
+        y = ma60_values
+        slope = np.polyfit(x, y, 1)[0]  # 线性回归的斜率
+        
+        # 如果斜率为正，说明MA60整体呈上升趋势
+        trend_rising = slope > 0
+        
+        # 两种条件都满足才认为是真正的上涨
+        return simple_rising and trend_rising
+    
     def _cache_stock_name(self, code: str, name: str):
         """缓存股票名称到本地文件"""
         try:
@@ -330,8 +377,8 @@ class TrendVolumeScreener:
         
         return common_stocks.get(code, "未知")
     
-    def analyze_trend(self, df: pd.DataFrame, lookback: int = 20) -> Dict:
-        """分析趋势"""
+    def analyze_trend(self, df: pd.DataFrame, lookback: int = 60) -> Dict:
+        """分析趋势（需要至少60天数据来计算MA60）"""
         if len(df) < lookback:
             return {}
         
@@ -455,11 +502,15 @@ class TrendVolumeScreener:
     def evaluate_stock(self, code: str) -> Optional[Dict]:
         """评估单只股票"""
         df = self.read_tdx_day(code)
-        if df is None or len(df) < 30:
+        if df is None or len(df) < 61:  # 需要至少61天数据来计算MA60
             return None
         
         # 获取股票名称
         stock_name = self.get_stock_name(code)
+        
+        # 1. 排除ST股票
+        if self._is_st_stock(stock_name):
+            return None
         
         # 分析趋势
         trend_analysis = self.analyze_trend(df)
@@ -474,11 +525,24 @@ class TrendVolumeScreener:
         # 获取最新价格
         latest_price = trend_analysis['latest_price']
         
-        # 1. 价格过滤
+        # 2. 价格过滤
         if latest_price < self.params['min_price'] or latest_price > self.params['max_price']:
             return None
         
-        # 2. 趋势条件检查
+        # 3. 检查60日均线上涨
+        if not self._is_ma60_rising(df):
+            return None
+        
+        # 4. 检查短期均线多头排列 (MA5 > MA10 > MA20)
+        if not (trend_analysis['ma5_above_ma10'] and trend_analysis['ma10_above_ma20']):
+            return None
+        
+        # 5. 检查所有均线都在60日均线之上 (MA5 > MA10 > MA20 > MA60)
+        if not (trend_analysis['ma5'] > trend_analysis['ma10'] > 
+                trend_analysis['ma20'] > trend_analysis['ma60']):
+            return None
+        
+        # 6. 趋势条件检查（原有逻辑）
         trend_ok = False
         ma_type = self.params['price_above_ma']
         
