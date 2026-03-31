@@ -73,12 +73,12 @@ class TrendVolumeScreener:
             'ma_trend': True,              # 是否要求均线多头排列
             
             # 三天表现参数
-            'min_three_day_change': 8.0,   # 最小三天涨幅(%)
+            'min_three_day_change': 3.0,   # 最小三天涨幅(%) - 优化：从8.0降低到3.0
             'max_three_day_change': 30.0,  # 最大三天涨幅(%)
             'min_up_days': 2,              # 最小上涨天数(3天内)
             
             # 量能参数
-            'min_volume_ratio': 1.0,       # 最小平均量比
+            'min_volume_ratio': 1.0,       # 最小平均量比 - 优化：从1.2降低到1.0
             'consecutive_volume': False,   # 是否要求连续三天放量
             
             # 风险参数
@@ -149,63 +149,10 @@ class TrendVolumeScreener:
             return None
     
     def get_stock_name(self, code: str) -> str:
-        """获取股票名称（优化网络请求版）"""
-        # 首先尝试从本地数据库获取
+        """获取股票名称（仅使用本地数据，避免网络请求）"""
+        # 只使用本地数据库获取，不进行网络请求
         local_name = self._get_stock_name_from_local(code)
-        if local_name != "未知":
-            return local_name
-        
-        # 如果本地数据库没有，尝试优化的网络请求
-        try:
-            # 转换股票代码格式
-            if code.startswith('sh'):
-                api_code = f'sh{code[2:]}'
-            elif code.startswith('sz'):
-                api_code = f'sz{code[2:]}'
-            else:
-                if code.startswith('6'):
-                    api_code = f'sh{code}'
-                else:
-                    api_code = f'sz{code}'
-            
-            # 使用新浪财经接口
-            url = f'http://hq.sinajs.cn/list={api_code}'
-            
-            # 设置请求头，避免被屏蔽
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'http://finance.sina.com.cn/',
-                'Accept': '*/*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-            }
-            
-            # 使用会话保持连接
-            session = requests.Session()
-            response = session.get(url, headers=headers, timeout=3, verify=False)
-            
-            if response.status_code == 200 and response.text:
-                # 解析返回数据
-                match = re.search(r'="([^"]+)"', response.text)
-                if match:
-                    parts = match.group(1).split(',')
-                    if len(parts) > 0 and parts[0]:
-                        name = parts[0].strip()
-                        if name and name not in ['', 'null', 'NULL', 'None']:
-                            # 缓存获取到的名称
-                            self._cache_stock_name(code, name)
-                            return name
-                
-                # 如果新浪接口失败，尝试东方财富接口
-                return self._get_stock_name_from_eastmoney(code)
-                
-        except requests.exceptions.Timeout:
-            print(f"⏰ {code}: 股票名称请求超时")
-        except requests.exceptions.ConnectionError:
-            print(f"🔌 {code}: 股票名称连接错误")
-        except Exception as e:
-            print(f"⚠️ {code}: 股票名称获取异常 - {e}")
-        
-        return "未知"
+        return local_name
     
     def _get_stock_name_from_eastmoney(self, code: str) -> str:
         """从东方财富获取股票名称"""
@@ -491,49 +438,24 @@ class TrendVolumeScreener:
             pass  # 缓存失败不影响主要功能
     
     def _get_stock_name_from_local(self, code: str) -> str:
-        """从本地数据库获取股票名称（简化版）"""
-        # 首先尝试从缓存文件读取
+        """从本地数据库获取股票名称（使用本地JSON文件）"""
         try:
-            import json
-            import os
-            
-            cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_name_cache.json")
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cache = json.load(f)
-                    if code in cache:
-                        return cache[code]
-        except:
-            pass
-        
-        # 如果缓存中没有，使用最小化的内置数据
-        common_stocks = {
-            # 最常见的几只股票
-            'sh600519': '贵州茅台', 'sz000001': '平安银行', 'sz002460': '赣锋锂业',
-            'sh600036': '招商银行', 'sz000858': '五粮液', 'sh600030': '中信证券',
-            'sz300750': '宁德时代', 'sh600276': '恒瑞医药', 'sh600000': '浦发银行',
-            'sh600016': '民生银行', 'sh600028': '中国石化', 'sh600031': '三一重工',
-            'sh600048': '保利发展', 'sh600050': '中国联通', 'sh600104': '上汽集团',
-            'sh600309': '万华化学', 'sh600547': '山东黄金', 'sh600585': '海螺水泥',
-            'sh600690': '海尔智家', 'sh600837': '海通证券', 'sh600887': '伊利股份',
-            'sh600900': '长江电力', 'sh601318': '中国平安', 'sh601328': '交通银行',
-            'sh601398': '工商银行', 'sh601668': '中国建筑', 'sh601857': '中国石油',
-            'sh601888': '中国国旅', 'sh601919': '中远海控', 'sh601988': '中国银行',
-            'sh601998': '中信银行', 'sz000002': '万科A', 'sz000063': '中兴通讯',
-            'sz000066': '中国长城', 'sz000100': 'TCL科技', 'sz000157': '中联重科',
-            'sz000333': '美的集团', 'sz000338': '潍柴动力', 'sz000425': '徐工机械',
-            'sz000538': '云南白药', 'sz000568': '泸州老窖', 'sz000625': '长安汽车',
-            'sz000651': '格力电器', 'sz000725': '京东方A', 'sz000876': '新希望',
-            'sz000895': '双汇发展', 'sz000938': '紫光股份', 'sz000963': '华东医药',
-            'sz000977': '浪潮信息', 'sz002024': '苏宁易购', 'sz002142': '宁波银行',
-            'sz002230': '科大讯飞', 'sz002241': '歌尔股份', 'sz002304': '洋河股份',
-            'sz002415': '海康威视', 'sz002475': '立讯精密', 'sz002594': '比亚迪',
-            'sz002714': '牧原股份', 'sz002736': '国信证券', 'sz300059': '东方财富',
-            'sz300122': '智飞生物', 'sz300124': '汇川技术', 'sz300142': '沃森生物',
-            'sz300347': '泰格医药', 'sz300498': '温氏股份', 'sz300760': '迈瑞医疗',
-        }
-        
-        return common_stocks.get(code, "未知")
+            # 导入本地股票名称模块
+            from .local_stock_names import get_stock_name as get_local_stock_name
+            return get_local_stock_name(code)
+        except ImportError:
+            # 如果无法导入，尝试直接导入
+            try:
+                import sys
+                import os
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+                from local_stock_names import get_stock_name as get_local_stock_name
+                return get_local_stock_name(code)
+            except Exception as e:
+                print(f"⚠️ 无法加载本地股票名称模块: {e}")
+                return "未知"
     
     def analyze_trend(self, df: pd.DataFrame, lookback: int = 60) -> Dict:
         """分析趋势（需要至少60天数据来计算MA60）"""
@@ -724,10 +646,14 @@ class TrendVolumeScreener:
         if not (trend_analysis['ma5_above_ma10'] and trend_analysis['ma10_above_ma20']):
             return None
         
-        # 5. 检查所有均线都在60日均线之上 (MA5 > MA10 > MA20 > MA60)
-        if not (trend_analysis['ma5'] > trend_analysis['ma10'] > 
-                trend_analysis['ma20'] > trend_analysis['ma60']):
+        # 5. 检查价格在60日均线之上（优化：放宽条件，只要求价格在60日线之上）
+        # 原条件：要求所有均线都在60日线之上 (MA5 > MA10 > MA20 > MA60) - 过于严格
+        # 新条件：只要求价格在60日线之上 - 更合理
+        if not trend_analysis['price_above_ma60']:
             return None
+        
+        # 保留短期均线多头排列作为加分项，在评分中给予额外加分
+        # 但不作为硬性排除条件
         
         # 6. 趋势条件检查（原有逻辑）
         trend_ok = False
@@ -1229,16 +1155,16 @@ def main():
                        help='最小上升趋势天数 (默认: 5)')
     
     # 三天表现参数
-    parser.add_argument('--min-three-day', type=float, default=8.0,
-                       help='最小三天涨幅(%) (默认: 6.0)')
+    parser.add_argument('--min-three-day', type=float, default=3.0,
+                       help='最小三天涨幅(%) (默认: 3.0) - 优化：从8.0降低到3.0')
     parser.add_argument('--max-three-day', type=float, default=30.0,
                        help='最大三天涨幅(%) (默认: 30.0)')
     parser.add_argument('--min-up-days', type=int, default=2,
                        help='最小上涨天数(3天内) (默认: 2)')
     
     # 量能参数
-    parser.add_argument('--min-volume-ratio', type=float, default=1.2,
-                       help='最小平均量比 (默认: 1.2)')
+    parser.add_argument('--min-volume-ratio', type=float, default=1.0,
+                       help='最小平均量比 (默认: 1.0) - 优化：从1.2降低到1.0')
     parser.add_argument('--consecutive-volume', action='store_true', default=False,
                        help='要求连续三天放量 (默认: False)')
     

@@ -68,17 +68,17 @@ class TrendVolumeScreener:
         # 默认参数
         self.params = {
             # 趋势参数
-            'min_trend_days': 3,           # 最小上升趋势天数
+            'min_trend_days': 5,           # 最小上升趋势天数
             'price_above_ma': 'ma5',       # 价格在哪个均线之上: ma5, ma10, ma20
-            'ma_trend': False,              # 是否要求均线多头排列
+            'ma_trend': True,              # 是否要求均线多头排列
             
             # 三天表现参数
-            'min_three_day_change': 5.0,   # 最小三天涨幅(%)
-            'max_three_day_change': 50.0,  # 最大三天涨幅(%)
-            'min_up_days': 1,              # 最小上涨天数(3天内)
+            'min_three_day_change': 3.0,   # 最小三天涨幅(%) - 优化：从8.0降低到3.0
+            'max_three_day_change': 30.0,  # 最大三天涨幅(%)
+            'min_up_days': 2,              # 最小上涨天数(3天内)
             
             # 量能参数
-            'min_volume_ratio': 1.0,       # 最小平均量比
+            'min_volume_ratio': 1.0,       # 最小平均量比 - 优化：从1.2降低到1.0
             'consecutive_volume': False,   # 是否要求连续三天放量
             
             # 风险参数
@@ -149,63 +149,10 @@ class TrendVolumeScreener:
             return None
     
     def get_stock_name(self, code: str) -> str:
-        """获取股票名称（优化网络请求版）"""
-        # 首先尝试从本地数据库获取
+        """获取股票名称（仅使用本地数据，避免网络请求）"""
+        # 只使用本地数据库获取，不进行网络请求
         local_name = self._get_stock_name_from_local(code)
-        if local_name != "未知":
-            return local_name
-        
-        # 如果本地数据库没有，尝试优化的网络请求
-        try:
-            # 转换股票代码格式
-            if code.startswith('sh'):
-                api_code = f'sh{code[2:]}'
-            elif code.startswith('sz'):
-                api_code = f'sz{code[2:]}'
-            else:
-                if code.startswith('6'):
-                    api_code = f'sh{code}'
-                else:
-                    api_code = f'sz{code}'
-            
-            # 使用新浪财经接口
-            url = f'http://hq.sinajs.cn/list={api_code}'
-            
-            # 设置请求头，避免被屏蔽
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'http://finance.sina.com.cn/',
-                'Accept': '*/*',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-            }
-            
-            # 使用会话保持连接
-            session = requests.Session()
-            response = session.get(url, headers=headers, timeout=3, verify=False)
-            
-            if response.status_code == 200 and response.text:
-                # 解析返回数据
-                match = re.search(r'="([^"]+)"', response.text)
-                if match:
-                    parts = match.group(1).split(',')
-                    if len(parts) > 0 and parts[0]:
-                        name = parts[0].strip()
-                        if name and name not in ['', 'null', 'NULL', 'None']:
-                            # 缓存获取到的名称
-                            self._cache_stock_name(code, name)
-                            return name
-                
-                # 如果新浪接口失败，尝试东方财富接口
-                return self._get_stock_name_from_eastmoney(code)
-                
-        except requests.exceptions.Timeout:
-            print(f"⏰ {code}: 股票名称请求超时")
-        except requests.exceptions.ConnectionError:
-            print(f"🔌 {code}: 股票名称连接错误")
-        except Exception as e:
-            print(f"⚠️ {code}: 股票名称获取异常 - {e}")
-        
-        return "未知"
+        return local_name
     
     def _get_stock_name_from_eastmoney(self, code: str) -> str:
         """从东方财富获取股票名称"""
@@ -724,10 +671,14 @@ class TrendVolumeScreener:
         if not (trend_analysis['ma5_above_ma10'] and trend_analysis['ma10_above_ma20']):
             return None
         
-        # 5. 检查所有均线都在60日均线之上 (MA5 > MA10 > MA20 > MA60)
-        if not (trend_analysis['ma5'] > trend_analysis['ma10'] > 
-                trend_analysis['ma20'] > trend_analysis['ma60']):
+        # 5. 检查价格在60日均线之上（优化：放宽条件，只要求价格在60日线之上）
+        # 原条件：要求所有均线都在60日线之上 (MA5 > MA10 > MA20 > MA60) - 过于严格
+        # 新条件：只要求价格在60日线之上 - 更合理
+        if not trend_analysis['price_above_ma60']:
             return None
+        
+        # 保留短期均线多头排列作为加分项，在评分中给予额外加分
+        # 但不作为硬性排除条件
         
         # 6. 趋势条件检查（原有逻辑）
         trend_ok = False
@@ -1229,16 +1180,16 @@ def main():
                        help='最小上升趋势天数 (默认: 5)')
     
     # 三天表现参数
-    parser.add_argument('--min-three-day', type=float, default=8.0,
-                       help='最小三天涨幅(%) (默认: 8.0)')
+    parser.add_argument('--min-three-day', type=float, default=3.0,
+                       help='最小三天涨幅(%) (默认: 3.0) - 优化：从8.0降低到3.0')
     parser.add_argument('--max-three-day', type=float, default=30.0,
                        help='最大三天涨幅(%) (默认: 30.0)')
     parser.add_argument('--min-up-days', type=int, default=2,
                        help='最小上涨天数(3天内) (默认: 2)')
     
     # 量能参数
-    parser.add_argument('--min-volume-ratio', type=float, default=1.2,
-                       help='最小平均量比 (默认: 1.2)')
+    parser.add_argument('--min-volume-ratio', type=float, default=1.0,
+                       help='最小平均量比 (默认: 1.0) - 优化：从1.2降低到1.0')
     parser.add_argument('--consecutive-volume', action='store_true', default=False,
                        help='要求连续三天放量 (默认: False)')
     
@@ -1268,11 +1219,11 @@ def main():
     # 如果用户只运行了 `python trend_volume_screener.py`，则默认进行全市场扫描
     default_args = {
         'price_above': 'ma5',
-        'ma_trend': False,
-        'min_trend_days': 8,
+        'ma_trend': True,
+        'min_trend_days': 6,
         'min_three_day': 5.0,
         'max_three_day': 30.0,
-        'min_up_days': 1,
+        'min_up_days': 2,
         'min_volume_ratio': 1.0,
         'consecutive_volume': False,
         'max_ten_day': 40.0,
