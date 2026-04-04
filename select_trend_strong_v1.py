@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-趋势强势股筛选器 v2
-==================
-改进点（相比 v1）：
-  1. RSI-14 超买过滤：高位股预警/过滤，避免追高
-  2. 相对强弱（个股 vs 上证/深证指数）：剔除随波逐流
-
-改进说明：
-  - RSI>75 → 扣20分；RSI>82 → 扣40分；RSI>88 → 直接过滤
-  - 相对强弱 = 个股20日涨幅 - 指数20日涨幅（使用本地TDX指数日线）
-  - 相对强弱 < -5% → 动量得分打5折；<-10% → 过滤
+趋势强势股筛选器
+================
+从全市场筛选趋势强势股，基于：
+  1. 均线多头排列（价格站在多条均线上方）
+  2. 动量加速（短期涨幅 + 相对强弱）
+  3. 量价配合（放量上涨）
 
 使用方法：
   python select_trend_strong.py                        # 默认 Top30
   python select_trend_strong.py --top-n 50            # 前50只
   python select_trend_strong.py --score-threshold 60  # 评分>60
+  python select_trend_strong.py --min-volume 1e8      # 成交额>1亿
   python select_trend_strong.py --codes sh600036      # 指定股票
 """
 
@@ -52,21 +49,8 @@ DEFAULT_MIN_DAYS = 60           # 上市>60交易日
 
 # ── 评分权重（趋势强势股版）───────────────────────────────
 WEIGHT_TREND = 0.50     # 趋势因子 50%（核心）
-WEIGHT_MOMENTUM = 0.30  # 动量因子 30%（含相对强弱调整）
+WEIGHT_MOMENTUM = 0.30  # 动量因子 30%
 WEIGHT_VOLUME = 0.20    # 量价因子 20%
-
-# ── 指数代码 ──────────────────────────────────────────────
-INDEX_CODES = ["sh000001", "sz399001"]  # 上证指数、深证成指
-
-# ── RSI 参数 ──────────────────────────────────────────────
-RSI_PERIOD = 14
-RSI_PENALTY_75 = 20   # RSI 75~82 扣20分
-RSI_PENALTY_82 = 40   # RSI 82~88 扣40分
-RSI_FILTER = 88        # RSI>88 直接过滤
-
-# ── 相对强弱参数 ──────────────────────────────────────────
-REL_STRENGTH_DISCOUNT = 0.5   # 相对强弱 < -5% 时动量得分打5折
-REL_STRENGTH_FILTER = -10.0   # 相对强弱 < -10% 直接过滤（百分比）
 
 
 # ============================================================
@@ -106,57 +90,6 @@ def compute_ema(series: pd.Series, n: int) -> pd.Series:
     return series.ewm(span=n, adjust=False).mean()
 
 
-def compute_rsi(series: pd.Series, n: int = 14) -> pd.Series:
-    """计算 RSI-n"""
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    # 使用指数移动平均
-    avg_gain = gain.ewm(alpha=1/n, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/n, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-
-def get_index_kline(code: str, days: int = 25) -> Optional[pd.DataFrame]:
-    """
-    获取指数K线（使用本地TDX数据，无需网络）。
-    返回最近 N 天的 DataFrame 或 None。
-    """
-    try:
-        result = get_complete_kline(code, allow_realtime_patch=True)
-        df = result.data
-        if df is None or df.empty or len(df) < days:
-            return None
-        return df.tail(days).reset_index(drop=True)
-    except Exception:
-        return None
-
-
-def get_market_gain(index_codes: List[str], days: int = 21) -> float:
-    """
-    获取市场基准涨幅（多指数平均）。
-    返回近 N 日指数平均涨幅百分比。
-    如果所有指数都失败，返回 0（表示不调整）。
-    """
-    gains = []
-    for idx_code in index_codes:
-        df = get_index_kline(idx_code, days + 5)
-        if df is None or len(df) < days + 1:
-            continue
-        close = df["close"]
-        # 用近 days 天的收盘价计算涨幅
-        start_price = float(close.iloc[-(days)])
-        end_price = float(close.iloc[-1])
-        if start_price > 0:
-            gain_pct = (end_price / start_price - 1) * 100
-            gains.append(gain_pct)
-    if gains:
-        return sum(gains) / len(gains)  # 多指数平均
-    return 0.0
-
-
 # ============================================================
 #  核心评分函数
 # ============================================================
@@ -164,7 +97,7 @@ def get_market_gain(index_codes: List[str], days: int = 21) -> float:
 def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
     """
     趋势强势评分（满分100）
-
+    
     维度：
       - 价格在均线上方的数量（MA5/MA10/MA20/MA60/MA120）
       - 均线多头排列数（MA5>MA10, MA10>MA20, MA20>MA60, MA60>MA120）
@@ -188,7 +121,7 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
     for ma, name in [(ma5, "MA5"), (ma10, "MA10"), (ma20, "MA20"), (ma60, "MA60"), (ma120, "MA120")]:
         val = float(ma.iloc[-1])
         above_scores.append(1 if c > val else 0)
-
+    
     above_score = sum(above_scores) / 5 * 40
 
     # 2. 均线多头排列（每组 8 分，满分 32）
@@ -206,20 +139,20 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
     # 3. 均线发散度（MA5 / MA60 ratio，满分 20）
     ma60_val = float(ma60.iloc[-1])
     if ma60_val > 0:
-        divergence = c / ma60_val
-        div_score = min(max((divergence - 1) * 50, 0), 20)
+        divergence = c / ma60_val  # 价格在60日线多少倍
+        div_score = min(max((divergence - 1) * 50, 0), 20)  # 每超1%得0.5分，上限20
     else:
         div_score = 0
 
     # 4. 5日均线斜率（满分 8）
     if len(ma5) >= 6:
         ma5_slope = float(ma5.iloc[-1]) / float(ma5.iloc[-6]) - 1
-        slope_score = min(max(ma5_slope * 200, 0), 8)
+        slope_score = min(max(ma5_slope * 200, 0), 8)  # 0.5%/日斜率得满分
     else:
         slope_score = 0
 
     total = above_score + bull_score + div_score + slope_score
-
+    
     factors = {
         "above_count": sum(above_scores),
         "above_ma5": above_scores[0],
@@ -238,15 +171,14 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
     return total, factors
 
 
-def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, Dict]:
+def score_momentum(df: pd.DataFrame) -> Tuple[float, Dict]:
     """
-    动量评分（满分100）— v2 新增相对强弱调整
-
+    动量评分（满分100）
+    
     维度：
       - 20日累计涨幅（满分 35）
       - 10日累计涨幅（满分 25）
       - 创20日新高（满分 40）
-      - 相对强弱调整（市场基准对比）
     """
     if df is None or len(df) < 25:
         return 0.0, {}
@@ -258,22 +190,18 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
         gain_20d = float(close.iloc[-1]) / float(close.iloc[-21]) - 1
         gain_20d = max(gain_20d, 0)  # 只看正向动量
         gain_20d_score = min(gain_20d * 100, 35)
-        gain_20d_pct = gain_20d * 100
     else:
         gain_20d = 0.0
         gain_20d_score = 0.0
-        gain_20d_pct = 0.0
 
     # 10日涨幅
     if len(close) >= 11:
         gain_10d = float(close.iloc[-1]) / float(close.iloc[-11]) - 1
         gain_10d = max(gain_10d, 0)
         gain_10d_score = min(gain_10d * 100, 25)
-        gain_10d_pct = gain_10d * 100
     else:
         gain_10d = 0.0
         gain_10d_score = 0.0
-        gain_10d_pct = 0.0
 
     # 创20日新高
     if len(close) >= 22:
@@ -288,30 +216,14 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
     else:
         new_high_score = 0.0
 
-    # ── 相对强弱调整（v2 新增）───────────────────────────
-    rel_strength = gain_20d_pct - market_gain  # 个股涨幅 - 市场平均涨幅
-
-    if rel_strength < REL_STRENGTH_FILTER:
-        # 跑输大盘超过10% → 动量得分打5折
-        momentum_raw = gain_20d_score + gain_10d_score + new_high_score
-        momentum_adjusted = momentum_raw * REL_STRENGTH_DISCOUNT
-        rel_strength_applied = True
-    else:
-        momentum_adjusted = gain_20d_score + gain_10d_score + new_high_score
-        rel_strength_applied = False
-
-    total = momentum_adjusted
+    total = gain_20d_score + gain_10d_score + new_high_score
 
     factors = {
-        "gain_20d_pct": round(gain_20d_pct, 3),
-        "gain_10d_pct": round(gain_10d_pct, 3),
+        "gain_20d_pct": round(gain_20d * 100, 3),
+        "gain_10d_pct": round(gain_10d * 100, 3),
         "new_high_score": round(new_high_score, 2),
         "gain_20d_score": round(gain_20d_score, 2),
         "gain_10d_score": round(gain_10d_score, 2),
-        # 相对强弱
-        "market_gain_pct": round(market_gain, 3),
-        "rel_strength_pct": round(rel_strength, 3),
-        "rel_strength_applied": rel_strength_applied,
     }
     return total, factors
 
@@ -319,6 +231,11 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
 def score_vol_price(df: pd.DataFrame) -> Tuple[float, Dict]:
     """
     量价评分（满分100）
+    
+    维度：
+      - 量比（5日均量基准，满分 35）
+      - 成交额放大（20日均额基准，满分 35）
+      - 放量上涨配合（满分 30）
     """
     if df is None or len(df) < 10:
         return 0.0, {}
@@ -379,10 +296,9 @@ def score_vol_price(df: pd.DataFrame) -> Tuple[float, Dict]:
 
 
 def evaluate_stock(code: str, min_volume: float = DEFAULT_MIN_VOLUME,
-                   exclude_st: bool = True,
-                   market_gain: float = 0.0) -> Optional[Dict]:
+                   exclude_st: bool = True) -> Optional[Dict]:
     """
-    评估单只股票，返回评分结果或 None（被过滤）。
+    评估单只股票，返回评分结果或 None（被过滤）
     """
     try:
         result = get_complete_kline(code, allow_realtime_patch=True)
@@ -413,37 +329,17 @@ def evaluate_stock(code: str, min_volume: float = DEFAULT_MIN_VOLUME,
         if exclude_st and name and ('ST' in name or 'S' in name):
             return None
 
-        # ── RSI-14 计算（v2 新增）─────────────────────────
-        rsi_val = 50.0
-        if len(df) >= RSI_PERIOD + 1:
-            rsi_series = compute_rsi(df["close"], RSI_PERIOD)
-            rsi_val = float(rsi_series.iloc[-1])
-        else:
-            rsi_val = 50.0
-
-        # RSI 超买过滤
-        if rsi_val > RSI_FILTER:
-            return None  # RSI>88 直接过滤
-
-        # ── 三维度评分 ────────────────────────────────────
+        # 三维度评分
         trend_score, trend_factors = score_trend_strong(df)
-        momentum_score, momentum_factors = score_momentum(df, market_gain=market_gain)
+        momentum_score, momentum_factors = score_momentum(df)
         vol_score, vol_factors = score_vol_price(df)
-
-        # ── RSI 惩罚（v2 新增，在加权前扣除）─────────────
-        rsi_penalty = 0
-        if rsi_val > RSI_PENALTY_82:  # 82~88
-            rsi_penalty = RSI_PENALTY_82
-        elif rsi_val > RSI_PENALTY_75:  # 75~82
-            rsi_penalty = RSI_PENALTY_75
 
         # 加权总分
         total = (
             trend_score * WEIGHT_TREND +
             momentum_score * WEIGHT_MOMENTUM +
             vol_score * WEIGHT_VOLUME
-        ) - rsi_penalty
-        total = max(total, 0)  # 不出现负分
+        )
 
         return {
             "code": code,
@@ -452,8 +348,6 @@ def evaluate_stock(code: str, min_volume: float = DEFAULT_MIN_VOLUME,
             "trend_score": round(trend_score, 2),
             "momentum_score": round(momentum_score, 2),
             "vol_score": round(vol_score, 2),
-            "rsi": round(rsi_val, 2),
-            "rsi_penalty": rsi_penalty,
             "factors": {
                 "trend": trend_factors,
                 "momentum": momentum_factors,
@@ -463,7 +357,7 @@ def evaluate_stock(code: str, min_volume: float = DEFAULT_MIN_VOLUME,
             "data_complete": result.is_complete,
         }
 
-    except Exception:
+    except Exception as e:
         return None
 
 
@@ -473,19 +367,14 @@ def scan_market(codes: List[str], top_n: int = DEFAULT_TOP_N,
                 max_workers: int = 30) -> List[Tuple[str, str, float, Dict]]:
     """
     扫描全市场，返回趋势强势股列表
+    
+    Returns:
+        [(code, name, score, factors), ...] 按 score 降序
     """
     total = len(codes)
     print(f"🚀 开始扫描 {total} 只股票...")
-
-    # ── 预先计算市场基准涨幅（v2 新增）───────────────────
-    t0_market = time.time()
-    market_gain = get_market_gain(INDEX_CODES, days=21)
-    print(f"   市场基准（近21日）：上证+深证平均涨幅 {market_gain:+.2f}%（耗时 {time.time()-t0_market:.1f}s）")
-
     print(f"   参数: top_n={top_n}, min_volume={min_volume/1e8:.1f}亿, score_threshold={score_threshold}")
     print(f"   权重: 趋势={WEIGHT_TREND*100:.0f}% 动量={WEIGHT_MOMENTUM*100:.0f}% 量价={WEIGHT_VOLUME*100:.0f}%")
-    print(f"   RSI过滤: >{RSI_FILTER} 过滤, >{RSI_PENALTY_82} 扣{RSI_PENALTY_82}分, >{RSI_PENALTY_75} 扣{RSI_PENALTY_75}分")
-    print(f"   相对强弱: <{REL_STRENGTH_FILTER}% 过滤, <{-5}% 动量5折")
     print()
 
     results = []
@@ -493,10 +382,7 @@ def scan_market(codes: List[str], top_n: int = DEFAULT_TOP_N,
     t0 = time.time()
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(evaluate_stock, code, min_volume, True, market_gain): code
-            for code in codes
-        }
+        futures = {executor.submit(evaluate_stock, code, min_volume): code for code in codes}
 
         for future in as_completed(futures):
             done += 1
@@ -512,8 +398,6 @@ def scan_market(codes: List[str], top_n: int = DEFAULT_TOP_N,
                     result["name"],
                     result["score"],
                     result["factors"],
-                    result["rsi"],
-                    result["rsi_penalty"],
                 ))
 
     print(f"\n  扫描完成！{time.time()-t0:.1f}秒，共 {len(results)} 只通过阈值筛选")
@@ -523,45 +407,40 @@ def scan_market(codes: List[str], top_n: int = DEFAULT_TOP_N,
     return results[:top_n]
 
 
-def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
+def print_result(results: List[Tuple[str, str, float, Dict]], title: str = "趋势强势股"):
     """格式化打印结果"""
     if not results:
         print("\n⚠️  未筛选到符合条件的股票")
         return
 
-    print(f"\n{'='*100}")
+    print(f"\n{'='*90}")
     print(f"📈 {title}（共 {len(results)} 只）")
-    print(f"{'='*100}")
-    print(f"{'代码':<10} {'名称':<10} {'总分':>6} {'趋势':>6} {'动量':>6} {'量价':>6} "
-          f"{'RSI':>5} {'20日涨幅':>8} {'相对强弱':>8} {'量比':>6}")
-    print(f"{'-'*100}")
+    print(f"{'='*90}")
+    print(f"{'代码':<10} {'名称':<10} {'总分':>6} {'趋势':>6} {'动量':>6} {'量价':>6} {'MA5上方':^5} {'MA多头':^5} {'20日涨幅':>8} {'量比':>6}")
+    print(f"{'-'*90}")
 
-    for item in results:
-        code, name, score, factors = item[0], item[1], item[2], item[3]
-        rsi = item[4] if len(item) > 4 else 0
-        rsi_penalty = item[5] if len(item) > 5 else 0
-
+    for code, name, score, factors in results:
+        f_trend = factors.get("trend", {})
         f_mom = factors.get("momentum", {})
         f_vol = factors.get("volume", {})
 
+        above_count = f_trend.get("above_count", 0)
+        bull_pairs = f_trend.get("bull_pairs", 0)
         gain_20d = f_mom.get("gain_20d_pct", 0)
-        rel_strength = f_mom.get("rel_strength_pct", 0)
         vol_ratio = f_vol.get("vol_ratio", 0)
 
-        penalty_str = f"-{rsi_penalty}" if rsi_penalty > 0 else ""
         print(f"{code:<10} {name:<10} {score:>6.1f} "
               f"{factors.get('trend_score', 0):>6.1f} "
               f"{factors.get('momentum_score', 0):>6.1f} "
               f"{factors.get('vol_score', 0):>6.1f} "
-              f"{rsi:>5.1f}{penalty_str:<4} "
-              f"{gain_20d:>7.2f}% {rel_strength:>+7.2f}% {vol_ratio:>6.2f}")
+              f"{above_count}/5   {bull_pairs}/4   "
+              f"{gain_20d:>7.2f}% {vol_ratio:>6.2f}")
 
-    print(f"{'-'*100}")
-    print(f"评分说明：总分 = 趋势×50% + 动量×30% + 量价×20% - RSI惩罚")
+    print(f"{'-'*90}")
+    print(f"评分说明：总分 = 趋势×50% + 动量×30% + 量价×20%")
     print(f"          趋势 = 价格在均线上方(40) + 均线多头排列(32) + 均线发散度(20) + 斜率(8)")
-    print(f"          动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40)，再按相对强弱调整")
+    print(f"          动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40)")
     print(f"          量价 = 量比(35) + 成交额放大(35) + 量价配合(30)")
-    print(f"v2 改进：RSI>88 过滤，RSI>82 扣40分，RSI>75 扣20分；相对强弱 < -10% 过滤，< -5% 动量5折")
 
 
 # ============================================================
@@ -571,7 +450,7 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="趋势强势股筛选器 v2")
+    parser = argparse.ArgumentParser(description="趋势强势股筛选器")
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N, help=f"返回前N只（默认{DEFAULT_TOP_N}）")
     parser.add_argument("--score-threshold", type=float, default=DEFAULT_SCORE_THRESHOLD,
                         help=f"评分阈值（默认{DEFAULT_SCORE_THRESHOLD}）")
