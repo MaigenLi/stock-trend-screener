@@ -46,6 +46,9 @@ from stock_common import (
 # 数据目录
 TDX_DATA_DIR = Path(os.path.expanduser("~/stock_data/vipdoc"))
 
+# ── 股票代码列表（共识：使用 stock_code/results/stock_codes.txt）────────
+STOCK_CODES_FILE = Path("/home/hfie/stock_code/results/stock_codes.txt")
+
 # ── 默认参数 ──────────────────────────────────────────────
 DEFAULT_TOP_N = 30
 DEFAULT_MIN_VOLUME = 5e7      # 5000万成交额
@@ -67,18 +70,44 @@ INDEX_CODES = ["sh000001", "sz399001", "sz399006"]  # 上证/深证/创业板
 # ============================================================
 
 def get_all_stock_codes() -> List[str]:
-    """获取全市场所有股票代码"""
+    """从 stock_code/results/stock_codes.txt 读取全市场股票代码列表。"""
+    if not STOCK_CODES_FILE.exists():
+        print(f"[警告] 股票代码文件不存在: {STOCK_CODES_FILE}")
+        print("     将回退到扫描数据目录...")
+        codes = []
+        for market in ["sh", "sz", "bj"]:
+            day_dir = TDX_DATA_DIR / market / "lday"
+            if not day_dir.exists():
+                continue
+            prefix = market
+            for fp in day_dir.glob(f"{prefix}*.day"):
+                pure = fp.stem[len(prefix):]
+                if pure.isdigit() and len(pure) == 6:
+                    codes.append(f"{market}{pure}")
+        return codes
+
     codes = []
-    for market in ["sh", "sz", "bj"]:
-        day_dir = TDX_DATA_DIR / market / "lday"
-        if not day_dir.exists():
-            continue
-        prefix = market
-        for fp in day_dir.glob(f"{prefix}*.day"):
-            pure = fp.stem[len(prefix):]
-            # 排除指数
-            if pure.isdigit() and len(pure) == 6:
-                codes.append(f"{market}{pure}")
+    with open(STOCK_CODES_FILE, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            # 跳过注释行、空行
+            if not line or line.startswith('#'):
+                continue
+            # 支持纯代码如 600000，或带前缀如 sh600000
+            code = line.lower()
+            if code.startswith(('sh', 'sz', 'bj')):
+                codes.append(code)
+            elif code.isdigit() and len(code) == 6:
+                # 推断市场前缀
+                if code.startswith(('60', '68', '90')):
+                    codes.append(f"sh{code}")
+                elif code.startswith(('00', '30', '20')):
+                    codes.append(f"sz{code}")
+                elif code.startswith(('43', '83', '87', '92')):
+                    codes.append(f"bj{code}")
+                else:
+                    codes.append(f"sh{code}")
+            # 忽略其他格式
     return codes
 
 
