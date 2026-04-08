@@ -8,12 +8,13 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 添加当前目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from trend_volume_screener import TrendVolumeScreener
+from trend_volume_screener_ultimate import UltimateTrendVolumeScreener as TrendVolumeScreener
 
 def main():
     print("=" * 80)
@@ -112,7 +113,7 @@ def main():
     
     # 加载全部股票
     print("📋 加载全部股票代码...")
-    stock_codes_file = "/home/hfie/stock_code/results/stock_codes.txt"
+    stock_codes_file = str(Path.home() / "stock_code" / "results" / "stock_codes.txt")
     all_codes = []
     
     try:

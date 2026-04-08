@@ -42,7 +42,7 @@ from stock_common import (
 )
 
 # ── 股票代码列表 ──────────────────────────────────────────
-STOCK_CODES_FILE = Path("/home/hfie/stock_code/results/stock_codes.txt")
+STOCK_CODES_FILE = Path.home() / "stock_code" / "results" / "stock_codes.txt"
 
 # ── 默认参数 ──────────────────────────────────────────────
 DEFAULT_TOP_N = 30

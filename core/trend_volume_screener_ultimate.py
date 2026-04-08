@@ -18,6 +18,7 @@ import os
 import sys
 import struct
 import pandas as pd
+from pathlib import Path
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
@@ -35,7 +36,7 @@ warnings.filterwarnings('ignore')
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 数据目录
-TDX_DIR = "/mnt/d/new_tdx/vipdoc/"
+TDX_DIR = str(Path.home() / "stock_data" / "vipdoc")
 WORK_DIR = "./"
 RESULTS_DIR = os.path.join(WORK_DIR, "results/ultimate")
 MODEL_DIR = os.path.join(WORK_DIR, "models")
@@ -46,7 +47,7 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # 股票代码文件
-STOCK_CODES_FILE = "/home/hfie/stock_code/results/stock_codes.txt"
+STOCK_CODES_FILE = str(Path.home() / "stock_code" / "results" / "stock_codes.txt")
 
 class DataSourceManager:
     """数据源管理器（多数据源支持）"""
