@@ -1030,8 +1030,8 @@ class UltimateTrendVolumeScreener:
                 elif isinstance(value, pd.DataFrame):
                     # 只保存关键数据
                     serializable[key] = value.to_dict('records') if not value.empty else []
-                elif isinstance(value, (np.int64, np.float64)):
-                    serializable[key] = float(value)
+                elif isinstance(value, (np.int64, np.float64, np.bool_)):
+                    serializable[key] = bool(value) if isinstance(value, np.bool_) else float(value)
                 else:
                     serializable[key] = value
             serializable_stocks.append(serializable)
