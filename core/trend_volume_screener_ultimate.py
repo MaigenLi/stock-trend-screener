@@ -483,6 +483,7 @@ class UltimateTrendVolumeScreener:
 
         # 提取并扁平化字段（与 final_full_market_scan.py 期望的格式一致）
         tra = result.get('trend_analysis', {})
+        vla = result.get('volume_analysis', {})
         flat = {
             'code': code,
             'name': result.get('stock_name', ''),
@@ -503,13 +504,15 @@ class UltimateTrendVolumeScreener:
             'ma10': ta.get('ma10', 0),
             'ma20': ta.get('ma20', 0),
             'trend_strength': ta.get('trend_strength', 0),
-            'avg_volume_ratio': va.get('avg_volume_ratio', 0),
-            'volume_ratio': va.get('volume_ratio', 0),
-            'consecutive_volume': va.get('consecutive_volume', False),
-            'today_volume_ratio': va.get('today_volume_ratio', 0),
+            'avg_volume_ratio': vla.get('avg_volume_ratio', 0),
+            'volume_ratio': vla.get('volume_ratio', 0),
+            'consecutive_volume': vla.get('consecutive_volume', False),
+            'volume_increasing': vla.get('volume_increasing', False),
+            'today_volume_ratio': vla.get('today_volume_ratio', 0),
             'three_day_change': tra.get('three_day_change', 0),
             'ten_day_change': tra.get('ten_day_change', 0),
             'up_days': tra.get('up_days', 0),
+            'consecutive_up': tra.get('consecutive_up', False),
             'data_source': result.get('data_source', ''),
         }
         return flat
