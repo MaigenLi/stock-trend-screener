@@ -1005,6 +1005,10 @@ class UltimateTrendVolumeScreener:
                 print(f"       三日涨幅: {stock.get('trend_analysis', {}).get('three_day_change', 0):+.2f}%")
                 print(f"       风险等级: {stock.get('risk_analysis', {}).get('risk_level', '未知')}")
     
+    def save_results(self, stocks: List[Dict], total_codes: int):
+        """保存结果（供 final_full_market_scan.py 调用）"""
+        self.save_ultimate_results(stocks, total_codes)
+
     def save_ultimate_results(self, stocks: List[Dict], total_codes: int):
         """保存终极版结果"""
         if not stocks:
