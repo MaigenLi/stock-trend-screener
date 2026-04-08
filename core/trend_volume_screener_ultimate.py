@@ -459,6 +459,50 @@ class UltimateTrendVolumeScreener:
             'analysis_version': 'ultimate_v1.0'
         }
     
+    def evaluate_stock(self, code: str) -> Optional[Dict]:
+        """
+        评估单只股票（供 final_full_market_scan.py 批量调用）。
+        返回扁平格式结果，符合旧版接口预期；不符合条件时返回 None。
+        """
+        result = self.analyze_stock_comprehensive(code)
+        if not result:
+            return None
+
+        ta = result.get('technical_analysis', {})
+        va = result.get('volume_analysis', {})
+        score = result.get('comprehensive_score', 0)
+
+        # 按 min_score 参数过滤
+        if score < self.params.get('min_score', 70):
+            return None
+
+        # 提取价格区间
+        price = ta.get('price', 0)
+        if price < self.params.get('min_price', 3) or price > self.params.get('max_price', 200):
+            return None
+
+        # 提取并扁平化字段（与 final_full_market_scan.py 期望的格式一致）
+        flat = {
+            'code': code,
+            'stock_name': result.get('stock_name', ''),
+            'score': score,
+            'price': price,
+            'change_pct': ta.get('change_pct', 0),
+            'price_above_ma5': ta.get('price_above_ma5', False),
+            'price_above_ma10': ta.get('price_above_ma10', False),
+            'price_above_ma20': ta.get('price_above_ma20', False),
+            'price_above_ma60': ta.get('price_above_ma60', False),
+            'ma5_above_ma10': ta.get('ma5_above_ma10', False),
+            'ma10_above_ma20': ta.get('ma10_above_ma20', False),
+            'ma20_above_ma60': ta.get('ma20_above_ma60', False),
+            'avg_volume_ratio': va.get('avg_volume_ratio', 0),
+            'volume_ratio': va.get('volume_ratio', 0),
+            'consecutive_volume': va.get('consecutive_volume', False),
+            'today_volume_ratio': va.get('today_volume_ratio', 0),
+            'data_source': result.get('data_source', ''),
+        }
+        return flat
+
     def _analyze_technical(self, df: pd.DataFrame) -> Dict:
         """技术分析"""
         if df.empty:
