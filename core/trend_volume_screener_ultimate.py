@@ -1020,22 +1020,21 @@ class UltimateTrendVolumeScreener:
         # 保存详细结果文件
         detailed_file = os.path.join(RESULTS_DIR, f"{base_name}.json")
         
-        # 转换为可序列化的格式
-        serializable_stocks = []
-        for stock in stocks:
-            serializable = {}
-            for key, value in stock.items():
-                if isinstance(value, (pd.Timestamp, datetime)):
-                    serializable[key] = value.isoformat()
-                elif isinstance(value, pd.DataFrame):
-                    # 只保存关键数据
-                    serializable[key] = value.to_dict('records') if not value.empty else []
-                elif isinstance(value, (np.int64, np.float64, np.bool_)):
-                    serializable[key] = bool(value) if isinstance(value, np.bool_) else float(value)
-                else:
-                    serializable[key] = value
-            serializable_stocks.append(serializable)
-        
+        def _sanitize(obj):
+            """递归将任何numpy/pandas类型转为原生Python类型"""
+            if isinstance(obj, dict):
+                return {k: _sanitize(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [_sanitize(x) for x in obj]
+            elif isinstance(obj, (np.bool_, np.int64, np.int32, np.float64, np.float32)):
+                return float(obj) if not isinstance(obj, np.bool_) else bool(obj)
+            elif isinstance(obj, (pd.Timestamp, datetime)):
+                return obj.isoformat()
+            elif isinstance(obj, pd.DataFrame):
+                return obj.to_dict('records') if not obj.empty else []
+            else:
+                return obj
+
         with open(detailed_file, "w", encoding='utf-8') as f:
             json.dump({
                 'metadata': {
@@ -1043,9 +1042,9 @@ class UltimateTrendVolumeScreener:
                     'version': 'ultimate_v1.0',
                     'total_codes': total_codes,
                     'selected_count': len(stocks),
-                    'parameters': self.params
+                    'parameters': _sanitize(self.params)
                 },
-                'stocks': serializable_stocks
+                'stocks': _sanitize(stocks)
             }, f, ensure_ascii=False, indent=2)
         
         # 保存简化版文本结果
