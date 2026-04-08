@@ -82,8 +82,8 @@ class DataSourceManager:
         data = None
         
         if source == 'auto':
-            # 自动选择数据源
-            for src in ['tencent', 'eastmoney', 'tdx']:
+            # 自动选择数据源（优先本地离线数据，再试网络数据）
+            for src in ['tdx', 'eastmoney', 'tencent']:
                 try:
                     data = self.sources[src](code, lookback_days)
                     if data and data.get('success', False):
@@ -353,7 +353,7 @@ class UltimateTrendVolumeScreener:
             # 性能参数
             'max_workers': 10,
             'cache_enabled': True,
-            'data_source': 'auto',
+            'data_source': 'tdx',
         }
         
         # 更新用户参数
@@ -579,6 +579,9 @@ class UltimateTrendVolumeScreener:
         df['vol_ma5'] = df['volume'].rolling(5).mean()
         df['volume_ratio'] = df['volume'] / df['vol_ma5']
         
+        # 重新获取 latest（因为刚才新增了列）
+        latest = df.iloc[-1]
+        
         # 最近3天量能
         if len(df) >= 3:
             last_3 = df.iloc[-3:]
@@ -591,15 +594,15 @@ class UltimateTrendVolumeScreener:
             volume_increasing = False
         
         # 今日量比
-        today_volume_ratio = latest.get('volume_ratio', 0)
+        today_volume_ratio = float(latest['volume_ratio']) if not pd.isna(latest['volume_ratio']) else 0.0
         
         return {
-            'volume': latest['volume'],
-            'avg_volume_ratio': avg_volume_ratio,
-            'today_volume_ratio': today_volume_ratio,
+            'volume': float(latest['volume']),
+            'avg_volume_ratio': round(float(avg_volume_ratio), 2) if not pd.isna(avg_volume_ratio) else 0.0,
+            'today_volume_ratio': round(today_volume_ratio, 2),
             'consecutive_volume': consecutive_volume,
             'volume_increasing': volume_increasing,
-            'vol_ma5': latest['vol_ma5'] if not pd.isna(latest['vol_ma5']) else 0,
+            'vol_ma5': float(latest['vol_ma5']) if not pd.isna(latest['vol_ma5']) else 0.0,
         }
     
     def _analyze_trend(self, df: pd.DataFrame) -> Dict:
