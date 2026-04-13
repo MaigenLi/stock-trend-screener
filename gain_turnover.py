@@ -22,6 +22,23 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import akshare as ak
+
+
+def _disp_w(s: str) -> int:
+    """计算字符串的显示宽度 (ASCII=1, CJK=2)."""
+    return sum(2 if (ord(c) >> 11) else 1 for c in s)
+
+
+def _rpad(s: str, width: int) -> str:
+    """左对齐，按显示宽度补足宽度 (for text columns)."""
+    d = _disp_w(s)
+    return s + " " * max(0, width - d)
+
+
+def _lpad(s: str, width: int) -> str:
+    """右对齐，按显示宽度补足宽度 (for numeric columns)."""
+    d = _disp_w(s)
+    return " " * max(0, width - d) + s
 import numpy as np
 import pandas as pd
 
@@ -586,13 +603,19 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
     lines.append(f"📊 {title}（共 {len(results)} 只）")
     lines.append("=" * 150)
     lines.append(
-        f"{'代码':<10} {'名称':<8} {'日期':<12} {'总分':>6} {'窗口涨幅':>9} {'20日额(亿)':>10} {'5日换手':>8} {'RSI':>6} {'偏离MA20':>9} {'收盘':>7}"
+        f"{_rpad('代码',10)} {_rpad('名称',8)} {_rpad('日期',12)} {_rpad('总分',6)} {_rpad('窗口涨幅',9)} "
+        f"{_rpad('20日额(亿)',10)} {_rpad('5日换手',8)} {_rpad('RSI',6)} {_rpad('偏离MA20',9)} {_rpad('收盘',7)}"
     )
     lines.append("-" * 150)
     for r in results:
+        name = r.name or ''
+        code = r.code or ''
+        signal_date = r.signal_date or ''
         lines.append(
-            f"{r.code:<10} {r.name:<8} {r.signal_date:<12} {r.score:>6.1f} {r.total_gain_window:>+8.2f}% "
-            f"{r.avg_amount_20:>10.2f} {r.avg_turnover_5:>7.2f}% {r.rsi14:>6.1f} {r.extension_pct:>+8.2f}% {r.close:>7.2f}"
+            f"{_rpad(code,10)} {_rpad(name,8)} {_rpad(signal_date,12)} {_lpad(f'{r.score:.1f}',6)} "
+            f"{_lpad(f'{r.total_gain_window:+.2f}%',9)} {_lpad(f'{r.avg_amount_20:.2f}',10)} "
+            f"{_lpad(f'{r.avg_turnover_5:.2f}%',8)} {_lpad(f'{r.rsi14:.1f}',6)} "
+            f"{_lpad(f'{r.extension_pct:+.2f}%',9)} {_lpad(f'{r.close:.2f}',7)}"
         )
     lines.append("-" * 150)
     lines.append("评分构成: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10 = 100")
