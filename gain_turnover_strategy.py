@@ -396,9 +396,9 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig) ->
     if np.isnan(ma5) or np.isnan(ma10) or np.isnan(ma20) or np.isnan(ma60):
         return None
 
-    ma5_prev5 = prepared.ma5[idx - 5]
-    ma10_prev5 = prepared.ma10[idx - 5]
-    if np.isnan(ma5_prev5) or np.isnan(ma10_prev5):
+    ma5_prev = prepared.ma5[idx - 1]
+    ma10_prev = prepared.ma10[idx - 1]
+    if np.isnan(ma5_prev) or np.isnan(ma10_prev):
         return None
 
     gain20 = (prepared.close[idx] / prepared.close[idx - 20] - 1.0) * 100.0
@@ -408,10 +408,10 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig) ->
     gain10 = (prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0
 
     # 强制趋势过滤，升级版核心约束
-    # ma5 > ma10, ma5和ma10均上涨; ma20位置不限（允许在ma60下方）
-    if not (close > ma5 > ma10):
+    # ma5 >= ma10（允许0.5%容差），ma5和ma10均上涨; ma20位置不限
+    if not (close > ma5 >= ma10 * 0.995):
         return None
-    if ma5 <= ma5_prev5 or ma10 <= ma10_prev5:
+    if ma5 <= ma5_prev or ma10 <= ma10_prev:
         return None
     if gain10 <= 0:
         return None
