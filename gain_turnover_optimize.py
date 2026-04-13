@@ -7,7 +7,7 @@
 默认目标：在满足最小交易数约束下，按 Sharpe 优先，其次平均收益、胜率。
 
 示例：
-  python optimize_gain_turnover.py \
+  python gain_turnover_optimize.py \
     --start 2024-01-01 --end 2025-12-31 \
     --days 2,3 --min-gain 1.5,2.0 --max-gain 5,6 \
     --quality-days 15,20,30 --turnover 0,1.5,3 \
@@ -31,8 +31,8 @@ import pandas as pd
 WORKSPACE = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
 
-from stock_trend.gain_turnover_strategy import StrategyConfig, get_all_stock_codes, normalize_prefixed
-from stock_trend.backtest_gain_turnover import load_all_stock_data, run_backtest
+from stock_trend.gain_turnover import StrategyConfig, get_all_stock_codes, normalize_prefixed
+from stock_trend.gain_turnover_backtest import load_all_stock_data, run_backtest
 
 DEFAULT_START = "2024-01-01"
 DEFAULT_END = "2025-12-31"

@@ -34,7 +34,7 @@ import akshare as ak
 WORKSPACE = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
 
-from stock_trend.gain_turnover_strategy import (
+from stock_trend.gain_turnover import (
     load_qfq_history,
     get_stock_name,
     load_stock_names,

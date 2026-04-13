@@ -30,7 +30,7 @@ import pandas as pd
 WORKSPACE = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
 
-from stock_trend.gain_turnover_strategy import (
+from stock_trend.gain_turnover import (
     PreparedData,
     StrategyConfig,
     evaluate_signal,
