@@ -17,6 +17,7 @@
   python select_trend_strong.py --top-n 50            # 前50只
   python select_trend_strong.py --score-threshold 60  # 评分>60
   python select_trend_strong.py --codes sh600036      # 指定股票
+  python select_trend_strong.py --date 2026-04-08    # 指定截止日期（复盘用）
 """
 
 import os
@@ -25,7 +26,7 @@ import time
 import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, date as Date
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -56,7 +57,7 @@ WEIGHT_MOMENTUM = 0.30  # 动量因子 30%（含相对强弱调整）
 WEIGHT_VOLUME = 0.20    # 量价因子 20%
 
 # ── 指数代码 ──────────────────────────────────────────────
-INDEX_CODES = ["sh000001", "sz399001", "sh000300", "sz399006"]  # 上证、深证、沪深300、创业板指
+INDEX_CODES = ["sh000001", "sz399001", "sh000300", "sz399006"]
 
 # ── RSI 参数 ──────────────────────────────────────────────
 RSI_PERIOD = 14
@@ -111,7 +112,6 @@ def compute_rsi(series: pd.Series, n: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = (-delta).clip(lower=0)
-    # 使用指数移动平均
     avg_gain = gain.ewm(alpha=1/n, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/n, adjust=False).mean()
     rs = avg_gain / avg_loss
@@ -119,41 +119,49 @@ def compute_rsi(series: pd.Series, n: int = 14) -> pd.Series:
     return rsi
 
 
-def get_index_kline(code: str, days: int = 25) -> Optional[pd.DataFrame]:
+def get_index_kline(code: str, days: int = 25,
+                     target_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
     """
     获取指数K线（使用本地TDX数据，无需网络）。
-    返回最近 N 天的 DataFrame 或 None。
+    target_date: 若指定则以该日期为截止日期（复盘模式）。
     """
     try:
-        result = get_complete_kline(code, allow_realtime_patch=True)
-        df = result.data
-        if df is None or df.empty or len(df) < days:
-            return None
-        return df.tail(days).reset_index(drop=True)
+        if target_date is not None:
+            # 使用end_date严格过滤到指定日期
+            result = get_complete_kline_df(code, now=target_date, allow_realtime_patch=False)
+            if result is None or result.empty:
+                return None
+            # 再tail到需要的days
+            return result.tail(days).reset_index(drop=True)
+        else:
+            result = get_complete_kline(code, allow_realtime_patch=True)
+            df = result.data
+            if df is None or df.empty or len(df) < days:
+                return None
+            return df.tail(days).reset_index(drop=True)
     except Exception:
         return None
 
 
-def get_market_gain(index_codes: List[str], days: int = 21) -> float:
+def get_market_gain(index_codes: List[str], days: int = 21,
+                    target_date: Optional[datetime] = None) -> float:
     """
     获取市场基准涨幅（多指数平均）。
-    返回近 N 日指数平均涨幅百分比。
-    如果所有指数都失败，返回 0（表示不调整）。
+    target_date: 若指定则以该日期为截止日期（复盘模式）。
     """
     gains = []
     for idx_code in index_codes:
-        df = get_index_kline(idx_code, days + 5)
+        df = get_index_kline(idx_code, days + 5, target_date=target_date)
         if df is None or len(df) < days + 1:
             continue
         close = df["close"]
-        # 用近 days 天的收盘价计算涨幅
         start_price = float(close.iloc[-(days)])
         end_price = float(close.iloc[-1])
         if start_price > 0:
             gain_pct = (end_price / start_price - 1) * 100
             gains.append(gain_pct)
     if gains:
-        return sum(gains) / len(gains)  # 多指数平均
+        return sum(gains) / len(gains)
     return 0.0
 
 
@@ -185,7 +193,7 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
 
     # 1. 价格在均线上方（每条均线 8 分，满分 40）
     above_scores = []
-    for ma, name in [(ma5, "MA5"), (ma10, "MA10"), (ma20, "MA20"), (ma60, "MA60"), (ma120, "MA120")]:
+    for ma in [ma5, ma10, ma20, ma60, ma120]:
         val = float(ma.iloc[-1])
         above_scores.append(1 if c > val else 0)
 
@@ -193,17 +201,13 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
 
     # 2. 均线多头排列（每组 8 分，满分 32）
     bull_pairs = 0
-    if float(ma5.iloc[-1]) > float(ma10.iloc[-1]):
-        bull_pairs += 1
-    if float(ma10.iloc[-1]) > float(ma20.iloc[-1]):
-        bull_pairs += 1
-    if float(ma20.iloc[-1]) > float(ma60.iloc[-1]):
-        bull_pairs += 1
-    if float(ma60.iloc[-1]) > float(ma120.iloc[-1]):
-        bull_pairs += 1
+    if float(ma5.iloc[-1]) > float(ma10.iloc[-1]): bull_pairs += 1
+    if float(ma10.iloc[-1]) > float(ma20.iloc[-1]): bull_pairs += 1
+    if float(ma20.iloc[-1]) > float(ma60.iloc[-1]): bull_pairs += 1
+    if float(ma60.iloc[-1]) > float(ma120.iloc[-1]): bull_pairs += 1
     bull_score = bull_pairs / 4 * 32
 
-    # 3. 均线发散度（MA5 / MA60 ratio，满分 20）
+    # 3. 均线发散度（满分 20）
     ma60_val = float(ma60.iloc[-1])
     if ma60_val > 0:
         divergence = c / ma60_val
@@ -222,14 +226,11 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
 
     factors = {
         "above_count": sum(above_scores),
-        "above_ma5": above_scores[0],
-        "above_ma10": above_scores[1],
-        "above_ma20": above_scores[2],
-        "above_ma60": above_scores[3],
+        "above_ma5": above_scores[0], "above_ma10": above_scores[1],
+        "above_ma20": above_scores[2], "above_ma60": above_scores[3],
         "above_ma120": above_scores[4],
         "above_score": round(above_score, 2),
-        "bull_pairs": bull_pairs,
-        "bull_score": round(bull_score, 2),
+        "bull_pairs": bull_pairs, "bull_score": round(bull_score, 2),
         "divergence_ratio": round(c / ma60_val, 4) if ma60_val > 0 else 0,
         "div_score": round(div_score, 2),
         "ma5_slope_pct": round(slope_score / 200 * 100, 3) if slope_score > 0 else 0,
@@ -256,13 +257,11 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
     # 20日涨幅
     if len(close) >= 21:
         gain_20d = float(close.iloc[-1]) / float(close.iloc[-21]) - 1
-        gain_20d = max(gain_20d, 0)  # 只看正向动量
+        gain_20d = max(gain_20d, 0)
         gain_20d_score = min(gain_20d * 100, 35)
         gain_20d_pct = gain_20d * 100
     else:
-        gain_20d = 0.0
-        gain_20d_score = 0.0
-        gain_20d_pct = 0.0
+        gain_20d = 0.0; gain_20d_score = 0.0; gain_20d_pct = 0.0
 
     # 10日涨幅
     if len(close) >= 11:
@@ -271,28 +270,25 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
         gain_10d_score = min(gain_10d * 100, 25)
         gain_10d_pct = gain_10d * 100
     else:
-        gain_10d = 0.0
-        gain_10d_score = 0.0
-        gain_10d_pct = 0.0
+        gain_10d = 0.0; gain_10d_score = 0.0; gain_10d_pct = 0.0
 
     # 创20日新高
     if len(close) >= 22:
         high_20d = float(close.iloc[-22:-1].max())
         near_high_ratio = float(close.iloc[-1]) / high_20d - 1 if high_20d > 0 else 0
-        if near_high_ratio >= 0:  # 创新高
+        if near_high_ratio >= 0:
             new_high_score = 40
-        elif near_high_ratio >= -0.02:  # 接近新高（2%以内）
+        elif near_high_ratio >= -0.02:
             new_high_score = 25
         else:
             new_high_score = max(0, 15 + near_high_ratio * 200)
     else:
         new_high_score = 0.0
 
-    # ── 相对强弱调整（v2 新增）───────────────────────────
-    rel_strength = gain_20d_pct - market_gain  # 个股涨幅 - 市场平均涨幅
+    # 相对强弱调整
+    rel_strength = gain_20d_pct - market_gain
 
     if rel_strength < REL_STRENGTH_FILTER:
-        # 跑输大盘超过10% → 动量得分打5折
         momentum_raw = gain_20d_score + gain_10d_score + new_high_score
         momentum_adjusted = momentum_raw * REL_STRENGTH_DISCOUNT
         rel_strength_applied = True
@@ -308,7 +304,6 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
         "new_high_score": round(new_high_score, 2),
         "gain_20d_score": round(gain_20d_score, 2),
         "gain_10d_score": round(gain_10d_score, 2),
-        # 相对强弱
         "market_gain_pct": round(market_gain, 3),
         "rel_strength_pct": round(rel_strength, 3),
         "rel_strength_applied": rel_strength_applied,
@@ -317,9 +312,7 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
 
 
 def score_vol_price(df: pd.DataFrame) -> Tuple[float, Dict]:
-    """
-    量价评分（满分100）
-    """
+    """量价评分（满分100）"""
     if df is None or len(df) < 10:
         return 0.0, {}
 
@@ -349,13 +342,9 @@ def score_vol_price(df: pd.DataFrame) -> Tuple[float, Dict]:
     else:
         price_change = 0.0
 
-    # 量比得分
     vr_score = min(max((vol_ratio - 1) * 25, 0), 35)
-
-    # 成交额放大得分
     ar_score = min(max((amt_ratio - 1) * 15, 0), 35)
 
-    # 量价配合：放量 + 上涨
     if price_change > 0.01 and vol_ratio > 1.2:
         match_score = 30
     elif price_change > 0 and vol_ratio > 1:
@@ -378,72 +367,79 @@ def score_vol_price(df: pd.DataFrame) -> Tuple[float, Dict]:
     return total, factors
 
 
-def evaluate_stock(code: str, min_volume: float = DEFAULT_MIN_VOLUME,
-                   exclude_st: bool = True,
-                   market_gain: float = 0.0) -> Optional[Dict]:
+def evaluate_stock(code: str,
+                  min_volume: float = DEFAULT_MIN_VOLUME,
+                  exclude_st: bool = True,
+                  market_gain: float = 0.0,
+                  target_date: Optional[datetime] = None) -> Optional[Dict]:
     """
     评估单只股票，返回评分结果或 None（被过滤）。
+    target_date: 若指定则以该日期为截止日期（复盘模式，不请求实时数据）。
     """
     try:
-        result = get_complete_kline(code, allow_realtime_patch=True)
-        df = result.data
+        # 若指定日期则强制使用本地离线数据，且严格过滤到该日期
+        use_realtime = (target_date is None)
+        if target_date is not None:
+            df_raw = get_complete_kline_df(code, now=target_date, allow_realtime_patch=False)
+            if df_raw is None or df_raw.empty:
+                return None
+            # 过滤：只保留 target_date 当天及之前的数据
+            target_ts = pd.Timestamp(target_date.date())
+            df = df_raw[df_raw["date"] <= target_ts].reset_index(drop=True)
+            if df.empty:
+                return None
+        else:
+            result = get_complete_kline(code, allow_realtime_patch=True)
+            df = result.data
 
-        # 基本面过滤
         if df is None or df.empty:
             return None
-
-        # 新股过滤
         if len(df) < DEFAULT_MIN_DAYS:
             return None
-
-        # 成交额过滤
         if len(df) >= 20:
             avg_amount = float(df["amount"].iloc[-20:].mean())
             if avg_amount < min_volume:
                 return None
 
-        # ST 股过滤
+        # ST 股过滤（仅当日模式支持，指定日期模式跳过名称查询）
         name = ""
-        try:
-            snap = get_stock_snapshot(code)
-            name = getattr(snap, 'name', '') or ''
-        except Exception:
-            pass
+        if target_date is None:
+            try:
+                snap = get_stock_snapshot(code)
+                name = getattr(snap, 'name', '') or ''
+            except Exception:
+                pass
 
         if exclude_st and name and ('ST' in name or 'S' in name):
             return None
 
-        # ── RSI-14 计算（v2 新增）─────────────────────────
+        # RSI-14 计算
         rsi_val = 50.0
         if len(df) >= RSI_PERIOD + 1:
             rsi_series = compute_rsi(df["close"], RSI_PERIOD)
             rsi_val = float(rsi_series.iloc[-1])
-        else:
-            rsi_val = 50.0
 
-        # RSI 超买过滤
         if rsi_val > RSI_FILTER:
             return None  # RSI>88 直接过滤
 
-        # ── 三维度评分 ────────────────────────────────────
+        # 三维度评分
         trend_score, trend_factors = score_trend_strong(df)
         momentum_score, momentum_factors = score_momentum(df, market_gain=market_gain)
         vol_score, vol_factors = score_vol_price(df)
 
-        # ── RSI 惩罚（v2 新增，在加权前扣除）─────────────
+        # RSI 惩罚
         rsi_penalty = 0
-        if rsi_val > RSI_PENALTY_82:  # 82~88
+        if rsi_val > RSI_PENALTY_82:
             rsi_penalty = RSI_PENALTY_82
-        elif rsi_val > RSI_PENALTY_75:  # 75~82
+        elif rsi_val > RSI_PENALTY_75:
             rsi_penalty = RSI_PENALTY_75
 
-        # 加权总分
         total = (
             trend_score * WEIGHT_TREND +
             momentum_score * WEIGHT_MOMENTUM +
             vol_score * WEIGHT_VOLUME
         ) - rsi_penalty
-        total = max(total, 0)  # 不出现负分
+        total = max(total, 0)
 
         return {
             "code": code,
@@ -460,27 +456,39 @@ def evaluate_stock(code: str, min_volume: float = DEFAULT_MIN_VOLUME,
                 "volume": vol_factors,
             },
             "passed": True,
-            "data_complete": result.is_complete,
+            "is_complete": target_date is None,
+            "data_date": str(df["date"].iloc[-1]),
         }
 
     except Exception:
         return None
 
 
-def scan_market(codes: List[str], top_n: int = DEFAULT_TOP_N,
-                min_volume: float = DEFAULT_MIN_VOLUME,
-                score_threshold: float = DEFAULT_SCORE_THRESHOLD,
-                max_workers: int = 30) -> List[Tuple[str, str, float, Dict]]:
+def scan_market(codes: List[str],
+               top_n: int = DEFAULT_TOP_N,
+               min_volume: float = DEFAULT_MIN_VOLUME,
+               score_threshold: float = DEFAULT_SCORE_THRESHOLD,
+               max_workers: int = 30,
+               target_date: Optional[datetime] = None) -> List[Tuple]:
     """
-    扫描全市场，返回趋势强势股列表
+    扫描全市场，返回趋势强势股列表。
+    target_date: 若指定则以该日期为截止日期（复盘模式）。
     """
     total = len(codes)
-    print(f"🚀 开始扫描 {total} 只股票...")
 
-    # ── 预先计算市场基准涨幅（v2 新增）───────────────────
+    if target_date:
+        date_str = target_date.strftime("%Y-%m-%d")
+        print(f"🚀 扫描 {total} 只股票（截止日期: {date_str}，纯离线模式）...")
+    else:
+        print(f"🚀 开始扫描 {total} 只股票...")
+
+    # 预先计算市场基准涨幅
     t0_market = time.time()
-    market_gain = get_market_gain(INDEX_CODES, days=21)
-    print(f"   市场基准（近21日）：上证+深证平均涨幅 {market_gain:+.2f}%（耗时 {time.time()-t0_market:.1f}s）")
+    market_gain = get_market_gain(INDEX_CODES, days=21, target_date=target_date)
+    if target_date:
+        print(f"   市场基准（近21日，{target_date.strftime('%Y-%m-%d')}）: {market_gain:+.2f}%（耗时 {time.time()-t0_market:.1f}s）")
+    else:
+        print(f"   市场基准（近21日）: {market_gain:+.2f}%（耗时 {time.time()-t0_market:.1f}s）")
 
     print(f"   参数: top_n={top_n}, min_volume={min_volume/1e8:.1f}亿, score_threshold={score_threshold}")
     print(f"   权重: 趋势={WEIGHT_TREND*100:.0f}% 动量={WEIGHT_MOMENTUM*100:.0f}% 量价={WEIGHT_VOLUME*100:.0f}%")
@@ -489,36 +497,32 @@ def scan_market(codes: List[str], top_n: int = DEFAULT_TOP_N,
     print()
 
     results = []
-    done = 0
+    done = [0]
     t0 = time.time()
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(evaluate_stock, code, min_volume, True, market_gain): code
-            for code in codes
-        }
-
-        for future in as_completed(futures):
-            done += 1
-            if done % 500 == 0:
+    def process(code: str):
+        result = evaluate_stock(code, min_volume, True, market_gain, target_date)
+        with lock:
+            done[0] += 1
+            if done[0] % 500 == 0:
                 elapsed = time.time() - t0
-                eta = elapsed / done * (total - done) if done > 0 else 0
-                print(f"  进度: {done}/{total} ({done/total*100:.1f}%) ETA={eta:.0f}s", end="\r")
-
-            result = future.result()
-            if result is not None and result["score"] >= score_threshold:
+                eta = elapsed / done[0] * (total - done[0]) if done[0] > 0 else 0
+                print(f"  进度: {done[0]}/{total} ({done[0]/total*100:.1f}%) ETA={eta:.0f}s", end="\r")
+        if result is not None and result["score"] >= score_threshold:
+            with lock:
                 results.append((
-                    result["code"],
-                    result["name"],
-                    result["score"],
-                    result["factors"],
-                    result["rsi"],
-                    result["rsi_penalty"],
+                    result["code"], result["name"], result["score"],
+                    result["factors"], result["rsi"], result["rsi_penalty"],
+                    result.get("data_date", ""),
                 ))
+
+    lock = __import__('threading').Lock()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(process, codes))
 
     print(f"\n  扫描完成！{time.time()-t0:.1f}秒，共 {len(results)} 只通过阈值筛选")
 
-    # 排序
     results.sort(key=lambda x: x[2], reverse=True)
     return results[:top_n]
 
@@ -529,18 +533,20 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         print("\n⚠️  未筛选到符合条件的股票")
         return
 
-    print(f"\n{'='*100}")
+    print(f"\n{'='*110}")
     print(f"📈 {title}（共 {len(results)} 只）")
-    print(f"{'='*100}")
+    print(f"{'='*110}")
     print(f"{'代码':<10} {'名称':<10} {'总分':>6} {'趋势':>6} {'动量':>6} {'量价':>6} "
-          f"{'RSI':>5} {'20日涨幅':>8} {'相对强弱':>8} {'量比':>6}")
-    print(f"{'-'*100}")
+          f"{'RSI':>5} {'20日涨幅':>8} {'相对强弱':>8} {'量比':>6} {'数据日':>12}")
+    print(f"{'-'*110}")
 
     for item in results:
         code, name, score, factors = item[0], item[1], item[2], item[3]
         rsi = item[4] if len(item) > 4 else 0
         rsi_penalty = item[5] if len(item) > 5 else 0
+        data_date = item[6] if len(item) > 6 else ""
 
+        f_trend = factors.get("trend", {})
         f_mom = factors.get("momentum", {})
         f_vol = factors.get("volume", {})
 
@@ -548,20 +554,24 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         rel_strength = f_mom.get("rel_strength_pct", 0)
         vol_ratio = f_vol.get("vol_ratio", 0)
 
+        trend_s = f_trend.get("above_score", 0) + f_trend.get("bull_score", 0) + f_trend.get("div_score", 0) + f_trend.get("slope_score", 0)
+        momentum_s = f_mom.get("gain_20d_score", 0) + f_mom.get("gain_10d_score", 0) + f_mom.get("new_high_score", 0)
+        vol_s = f_vol.get("vr_score", 0) + f_vol.get("ar_score", 0) + f_vol.get("match_score", 0)
+
         penalty_str = f"-{rsi_penalty}" if rsi_penalty > 0 else ""
         print(f"{code:<10} {name:<10} {score:>6.1f} "
-              f"{factors.get('trend_score', 0):>6.1f} "
-              f"{factors.get('momentum_score', 0):>6.1f} "
-              f"{factors.get('vol_score', 0):>6.1f} "
+              f"{trend_s:>6.1f} "
+              f"{momentum_s:>6.1f} "
+              f"{vol_s:>6.1f} "
               f"{rsi:>5.1f}{penalty_str:<4} "
-              f"{gain_20d:>7.2f}% {rel_strength:>+7.2f}% {vol_ratio:>6.2f}")
+              f"{gain_20d:>7.2f}% {rel_strength:>+7.2f}% {vol_ratio:>6.2f} {data_date:>12}")
 
-    print(f"{'-'*100}")
+    print(f"{'-'*110}")
     print(f"评分说明：总分 = 趋势×50% + 动量×30% + 量价×20% - RSI惩罚")
     print(f"          趋势 = 价格在均线上方(40) + 均线多头排列(32) + 均线发散度(20) + 斜率(8)")
     print(f"          动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40)，再按相对强弱调整")
     print(f"          量价 = 量比(35) + 成交额放大(35) + 量价配合(30)")
-    print(f"v2 改进：RSI>88 过滤，RSI>82 扣40分，RSI>75 扣20分；相对强弱 < -10% 过滤，< -5% 动量5折")
+    print(f"v2改进：RSI>88过滤，RSI>82扣40分，RSI>75扣20分；相对强弱<-10%过滤，<-5%动量5折")
 
 
 # ============================================================
@@ -572,14 +582,29 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="趋势强势股筛选器 v2")
-    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N, help=f"返回前N只（默认{DEFAULT_TOP_N}）")
+    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N,
+                        help=f"返回前N只（默认{DEFAULT_TOP_N}）")
     parser.add_argument("--score-threshold", type=float, default=DEFAULT_SCORE_THRESHOLD,
                         help=f"评分阈值（默认{DEFAULT_SCORE_THRESHOLD}）")
     parser.add_argument("--min-volume", type=float, default=DEFAULT_MIN_VOLUME,
                         help=f"最低成交额阈值（默认{DEFAULT_MIN_VOLUME/1e8:.1f}亿）")
     parser.add_argument("--codes", nargs="+", default=None, help="指定股票代码")
     parser.add_argument("--workers", type=int, default=30, help="并行线程数（默认30）")
+    parser.add_argument("--date", type=str, default=None,
+                        help="指定截止日期（YYYY-MM-DD），默认当前/最近交易日。复盘时使用本地离线数据。")
     args = parser.parse_args()
+
+    # 解析目标日期
+    target_date = None
+    if args.date:
+        if args.date.lower() == "today":
+            target_date = datetime.now()
+        else:
+            try:
+                target_date = datetime.strptime(args.date, "%Y-%m-%d")
+            except ValueError:
+                print(f"❌ 日期格式错误: {args.date}，应为 YYYY-MM-DD")
+                sys.exit(1)
 
     # 获取股票列表
     if args.codes:
@@ -589,6 +614,9 @@ if __name__ == "__main__":
         codes = get_all_stock_codes()
         print(f"📋 全市场股票: {len(codes)} 只")
 
+    if target_date:
+        print(f"📅 复盘模式: 截止日期 {target_date.strftime('%Y-%m-%d')}（纯本地离线数据）")
+
     # 扫描
     results = scan_market(
         codes,
@@ -596,7 +624,9 @@ if __name__ == "__main__":
         min_volume=args.min_volume,
         score_threshold=args.score_threshold,
         max_workers=args.workers,
+        target_date=target_date,
     )
 
     # 输出
-    print_result(results)
+    title = f"趋势强势股 v2（{target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')}）"
+    print_result(results, title=title)

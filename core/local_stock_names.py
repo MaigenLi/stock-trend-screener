@@ -10,7 +10,7 @@ import os
 from typing import Dict, Optional
 
 # 本地股票名称文件路径
-LOCAL_STOCK_NAMES_FILE = "/home/hfie/stock_code/results/all_stock_names_final.json"
+LOCAL_STOCK_NAMES_FILE = "~/stock_code/results/all_stock_names_final.json"
 
 # 缓存加载的股票名称数据
 _stock_names_cache = None
