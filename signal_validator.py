@@ -184,13 +184,30 @@ def validate_signal(
 
 
 def find_latest_screen_output() -> Optional[Path]:
+    """
+    找昨日的选股结果文件（以文件内日期为准，而非文件修改时间）。
+    16:40 执行时，今日 screening 大概率还在运行中，取前一天的输出最准确。
+    """
     reports_dir = Path.home() / "stock_reports"
-    files = sorted(
-        [p for p in reports_dir.glob("daily_screen_*.txt")],
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return files[0] if files else None
+    today = datetime.now()
+    candidates = list(reports_dir.glob("daily_screen_*.txt"))
+    if not candidates:
+        return None
+
+    # 优先：找到昨天日期的文件
+    from datetime import timedelta
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    for p in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        # 文件名格式：daily_screen_YYYY-MM-DD.txt
+        fname = p.name
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", fname)
+        if m:
+            file_date = m.group(1)
+            if file_date == yesterday:
+                return p
+
+    # 兜底：没有昨天的文件，则取最新修改的文件
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
 
 def run_validation(
