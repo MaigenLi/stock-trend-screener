@@ -63,7 +63,7 @@ class StrategyConfig:
     min_amount: float = 1e8
     score_threshold: float = 60.0
     adjust: str = "qfq"
-    max_extension_pct: float = 10.0
+    max_extension_pct: float = 16.0
     min_history_days: int = 90
     check_fundamental: bool = False   # 是否检查基本面（亏损/PE为负扣分）
 

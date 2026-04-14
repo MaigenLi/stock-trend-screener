@@ -282,7 +282,7 @@ if __name__ == "__main__":
     parser.add_argument("--turnover", type=float, default=1.5, help="5日平均换手率下限%%")
     parser.add_argument("--min-volume", type=float, default=1e8, help="20日平均成交额下限")
     parser.add_argument("--score-threshold", type=float, default=60.0, help="评分门槛")
-    parser.add_argument("--max-extension", type=float, default=10.0, help="距MA20最大偏离%%")
+    parser.add_argument("--max-extension", type=float, default=16.0, help="距MA20最大偏离%%")
     parser.add_argument("--adjust", type=str, default="qfq", choices=["qfq", "", "hfq"], help="复权方式")
     parser.add_argument("--hold", type=int, default=3, help="持有交易日数")
     parser.add_argument("--start", type=str, default=DEFAULT_START, help="开始日期")
