@@ -43,9 +43,11 @@ import numpy as np
 import pandas as pd
 
 WORKSPACE = Path(__file__).parent.parent.resolve()
-CACHE_DIR = WORKSPACE / "stock_trend" / ".cache" / "qfq_daily"
+CACHE_DIR = WORKSPACE / ".cache" / "qfq_daily"
 STOCK_CODES_FILE = Path.home() / "stock_code" / "results" / "stock_codes.txt"
 STOCK_NAMES_FILE = Path.home() / "stock_code" / "results" / "all_stock_names_final.json"
+FUNDAMENTAL_CACHE_DIR = WORKSPACE / ".cache" / "fundamental"
+FUNDAMENTAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _CACHE_LOCKS: dict[str, threading.Lock] = {}
 _CACHE_LOCKS_GUARD = threading.Lock()
@@ -63,6 +65,25 @@ class StrategyConfig:
     adjust: str = "qfq"
     max_extension_pct: float = 10.0
     min_history_days: int = 90
+    check_fundamental: bool = False   # 是否检查基本面（亏损/PE为负扣分）
+
+
+@dataclass
+class FundamentalData:
+    """基本面数据（最新季度报告）。"""
+    code: str
+    eps: float          # 摊薄每股收益（元）
+    roe: float          # 净资产收益率（%）
+    gross_margin: float # 销售毛利率（%）
+    net_profit: float   # 净利润（元）
+    is_profitable: bool # 是否盈利
+    pe: float           # 市盈率（动态，可能为nan）
+    report_date: str     # 最新报告日期
+
+
+# ── 基本面扣分常量 ───────────────────────────────────
+FUNDAMENTAL_PENALTY_LOSS = 20     # 亏损（EPS<0）扣20分
+FUNDAMENTAL_PENALTY_NEGATIVE_PE = 10  # PE为负（亏损股）扣10分
 
 
 def get_lock(key: str) -> threading.Lock:
@@ -212,6 +233,101 @@ def _fetch_ak_qfq(code: str, adjust: str = "qfq") -> pd.DataFrame:
 
 
 
+def _fundamental_cache_path(code: str) -> Path:
+    """基本面缓存路径（JSON，每季度更新一次）。"""
+    pure = normalize_symbol(code)
+    return FUNDAMENTAL_CACHE_DIR / f"{pure}.json"
+
+
+def _fetch_fundamental(code: str) -> Optional[FundamentalData]:
+    """
+    从 AkShare 获取单只股票基本面数据（最新季度）。
+    数据源：stock_financial_analysis_indicator（东方财富）
+    """
+    pure = normalize_symbol(code)
+    last_error = None
+    for _ in range(2):
+        try:
+            df = ak.stock_financial_analysis_indicator(symbol=pure, start_year="2023")
+            if df is None or df.empty:
+                last_error = "empty"
+                time.sleep(0.3)
+                continue
+            df = df.sort_values("日期", ascending=False).reset_index(drop=True)
+            latest = df.iloc[0]
+
+            # EPS（摊薄每股收益，取最新有效值）
+            eps_col = next((c for c in df.columns if "摊薄每股收益" in c), None)
+            eps_series = df[eps_col].dropna() if eps_col else pd.Series(dtype=float)
+            eps = float(eps_series.iloc[-1]) if not eps_series.empty else 0.0
+
+            # ROE（净资产收益率，取最新有效值）
+            roe_col = next((c for c in df.columns if "净资产收益率" in c and "加权" not in c), None)
+            roe_series = df[roe_col].dropna() if roe_col else pd.Series(dtype=float)
+            roe = float(roe_series.iloc[-1]) if not roe_series.empty else 0.0
+
+            # 毛利率（取最新有效值）
+            gm_col = next((c for c in df.columns if "销售毛利率" in c), None)
+            gm_series = df[gm_col].dropna() if gm_col else pd.Series(dtype=float)
+            gross_margin = float(gm_series.iloc[-1]) if not gm_series.empty else 0.0
+
+            # 净利润（单位：元 → 转为亿元）
+            # 优先：扣除非经常性损益后的净利润(元)，其次归属母公司净利润(元)
+            np_col = next(
+                (c for c in df.columns if c in ("扣除非经常性损益后的净利润(元)", "归属母公司净利润(元)", "净利润(元)")),
+                None
+            )
+            net_profit = float(latest[np_col]) / 1e8 if np_col and pd.notna(latest.get(np_col)) else 0.0
+
+            # PE（估算：收盘价 / EPS）
+            pe = float("nan")
+
+            # 盈利判断：EPS>0
+            is_profitable = eps > 0
+            report_date = str(latest.get("日期", ""))
+
+            return FundamentalData(
+                code=normalize_prefixed(code),
+                eps=eps,
+                roe=roe,
+                gross_margin=gross_margin,
+                net_profit=net_profit,
+                is_profitable=is_profitable,
+                pe=pe,
+                report_date=report_date,
+            )
+        except Exception as e:
+            last_error = e
+            time.sleep(0.3)
+    return None
+
+
+def load_fundamental_data(code: str, refresh: bool = False) -> Optional[FundamentalData]:
+    """
+    加载基本面数据（缓存优先，过期时间设为90天）。
+    """
+    path = _fundamental_cache_path(code)
+    if not refresh and path.exists():
+        age_days = (time.time() - path.stat().st_mtime) / 86400.0
+        if age_days < 90:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                return FundamentalData(**raw)
+            except Exception:
+                pass
+    # 缓存未命中，尝试从网络获取
+    data = _fetch_fundamental(code)
+    if data is not None:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(asdict(data), f, ensure_ascii=False)
+        except Exception:
+            pass
+    return data
+
+
+
 def load_qfq_history(
     code: str,
     start_date: Optional[str | pd.Timestamp] = None,
@@ -332,6 +448,11 @@ class SignalResult:
     extension_pct: float
     subscores: Dict[str, float]
     details: Dict[str, float | int | str]
+    fundamental_penalty: int = 0
+    fundamental_eps: Optional[float] = None
+    fundamental_roe: Optional[float] = None
+    fundamental_is_profitable: Optional[bool] = None
+    fundamental_report_date: Optional[str] = None
 
 
 def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
@@ -383,7 +504,8 @@ def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
     )
 
 
-def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig) -> Optional[dict]:
+def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
+                  code: Optional[str] = None, fundamental: Optional[FundamentalData] = None) -> Optional[dict]:
     min_idx = max(config.signal_days + 1, config.quality_days, 60, config.min_history_days)
     if idx < min_idx:
         return None
@@ -535,6 +657,13 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig) ->
     subscores["rsi_health"] = round(rsi_score, 2)
     score += rsi_score
 
+    # ── 基本面扣分（亏损 / PE为负）──────────────────────
+    fundamental_penalty = 0
+    if config.check_fundamental and fundamental is not None:
+        if not fundamental.is_profitable:
+            fundamental_penalty = FUNDAMENTAL_PENALTY_LOSS
+        score -= fundamental_penalty
+
     if score < config.score_threshold:
         return None
 
@@ -566,15 +695,24 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig) ->
         "ma20": round(float(ma20), 2),
         "ma60": round(float(ma60), 2),
         "extension_pct": round(float(extension_pct), 2),
+        "fundamental_penalty": fundamental_penalty,
+        "fundamental_eps": round(fundamental.eps, 3) if fundamental is not None else None,
+        "fundamental_roe": round(fundamental.roe, 2) if fundamental is not None else None,
+        "fundamental_is_profitable": fundamental.is_profitable if fundamental is not None else None,
+        "fundamental_report_date": fundamental.report_date if fundamental is not None else None,
     }
 
 
-def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: StrategyConfig) -> Optional[SignalResult]:
+def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: StrategyConfig,
+                         fundamental: Optional[FundamentalData] = None) -> Optional[SignalResult]:
     prepared = prepare_data(df)
     if prepared is None:
         return None
+    # 基本面按需加载（缓存90天）
+    if config.check_fundamental and fundamental is None:
+        fundamental = load_fundamental_data(code)
     idx = len(prepared.df) - 1
-    result = evaluate_signal(prepared, idx, config)
+    result = evaluate_signal(prepared, idx, config, code=code, fundamental=fundamental)
     if result is None:
         return None
     return SignalResult(
@@ -594,29 +732,55 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         extension_pct=result["extension_pct"],
         subscores=result["subscores"],
         details=result["details"],
+        fundamental_penalty=result["fundamental_penalty"],
+        fundamental_eps=result["fundamental_eps"],
+        fundamental_roe=result["fundamental_roe"],
+        fundamental_is_profitable=result["fundamental_is_profitable"],
+        fundamental_report_date=result["fundamental_report_date"],
     )
 
 
 def format_signal_results(results: List[SignalResult], title: str) -> str:
     lines = []
-    lines.append("=" * 150)
+    lines.append("=" * 160)
     lines.append(f"📊 {title}（共 {len(results)} 只）")
-    lines.append("=" * 150)
-    lines.append(
+    lines.append("=" * 160)
+    # 主表（技术面）
+    col_spec = (
         f"{_rpad('代码',10)} {_rpad('名称',8)} {_rpad('日期',12)} {_rpad('总分',6)} {_rpad('窗口涨幅',9)} "
-        f"{_rpad('20日额(亿)',10)} {_rpad('5日换手',8)} {_rpad('RSI',6)} {_rpad('偏离MA20',9)} {_rpad('收盘',7)}"
+        f"{_rpad('20日额(亿)',10)} {_rpad('5日换手',8)} {_rpad('RSI',6)} {_rpad('偏离MA20',9)} "
+        f"{_rpad('收盘',7)} {_rpad('EPS',7)} {_rpad('ROE%%',7)} {_rpad('盈利',5)} {_rpad('扣分',5)}"
     )
-    lines.append("-" * 150)
+    lines.append(col_spec)
+    lines.append("-" * 160)
     for r in results:
-        name = r.name or ''
-        code = r.code or ''
-        signal_date = r.signal_date or ''
+        name = r.name or ""
+        code = r.code or ""
+        signal_date = r.signal_date or ""
+        eps_str = f"{r.fundamental_eps:.3f}" if r.fundamental_eps is not None else "-"
+        roe_str = f"{r.fundamental_roe:.2f}" if r.fundamental_roe is not None else "-"
+        profit_str = "✓" if r.fundamental_is_profitable else "✗"
+        penalty_str = f"-{r.fundamental_penalty}" if r.fundamental_penalty else "-"
         lines.append(
             f"{_rpad(code,10)} {_rpad(name,8)} {_rpad(signal_date,12)} {_lpad(f'{r.score:.1f}',6)} "
             f"{_lpad(f'{r.total_gain_window:+.2f}%',9)} {_lpad(f'{r.avg_amount_20:.2f}',10)} "
             f"{_lpad(f'{r.avg_turnover_5:.2f}%',8)} {_lpad(f'{r.rsi14:.1f}',6)} "
-            f"{_lpad(f'{r.extension_pct:+.2f}%',9)} {_lpad(f'{r.close:.2f}',7)}"
+            f"{_lpad(f'{r.extension_pct:+.2f}%',9)} {_lpad(f'{r.close:.2f}',7)} "
+            f"{_lpad(eps_str,7)} {_lpad(roe_str,7)} {_lpad(profit_str,5)} {_lpad(penalty_str,5)}"
         )
-    lines.append("-" * 150)
-    lines.append("评分构成: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10 = 100")
+    lines.append("-" * 160)
+    lines.append("评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10 - 基本面扣分")
+    # 基本面详情（亏损股摘要）
+    loss_stocks = [r for r in results if r.fundamental_penalty > 0]
+    if loss_stocks:
+        lines.append(f"\n⚠️  亏损/微利股（已扣分，共 {len(loss_stocks)} 只）：")
+        lines.append(f"{'代码':<10} {'名称':<8} {'报告期':<12} {'EPS(元)':>8} {'ROE%%':>7} {'扣分':>5}")
+        for r in loss_stocks:
+            lines.append(
+                f"{r.code:<10} {r.name:<8} "
+                f"{(r.fundamental_report_date or '-'):<12} "
+                f"{(r.fundamental_eps if r.fundamental_eps is not None else 0):>8.3f} "
+                f"{(r.fundamental_roe if r.fundamental_roe is not None else 0):>7.2f} "
+                f"{r.fundamental_penalty:>5}"
+            )
     return "\n".join(lines)

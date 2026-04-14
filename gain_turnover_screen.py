@@ -125,6 +125,7 @@ if __name__ == "__main__":
     parser.add_argument("--codes", nargs="+", default=None, help="指定股票代码")
     parser.add_argument("--date", type=str, default=None, help="截止日期 YYYY-MM-DD")
     parser.add_argument("--refresh-cache", action="store_true", help="强制刷新前复权缓存")
+    parser.add_argument("--check-fundamental", action="store_true", help="开启基本面检查（亏损股扣20分）")
     parser.add_argument("--output", "-o", type=str, default=None, help="输出文件路径")
     args = parser.parse_args()
 
@@ -146,6 +147,7 @@ if __name__ == "__main__":
         score_threshold=args.score_threshold,
         adjust=args.adjust,
         max_extension_pct=args.max_extension,
+        check_fundamental=args.check_fundamental,
     )
 
     codes = [normalize_prefixed(c) for c in args.codes] if args.codes else get_all_stock_codes()
@@ -164,9 +166,10 @@ if __name__ == "__main__":
     )
 
     title_date = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
+    fund_tag = "+基本面" if config.check_fundamental else ""
     title = (
         f"升级版筛选 前复权={config.adjust or 'none'} | 信号{config.signal_days}天[{config.min_gain},{config.max_gain}] "
-        f"| 质量{config.quality_days}天 | {title_date}"
+        f"| 质量{config.quality_days}天{fund_tag} | {title_date}"
     )
     output_text = format_signal_results(results, title)
     print("\n" + output_text)
