@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+前复权日线数据预缓存脚本
+========================
+每个交易日 16:10 定时执行，将全市场股票前复权日线数据刷新到本地缓存，
+确保本地 K 线数据为最新（覆盖当日实时数据）。
+
+用法：
+  python cache_qfq_daily.py                     # 增量刷新（只刷新超过6小时的缓存）
+  python cache_qfq_daily.py --max-age-hours 4  # 自定义阈值
+  python cache_qfq_daily.py --codes 300568     # 指定股票
+  python cache_qfq_daily.py --refresh          # 强制刷新全部
+  python cache_qfq_daily.py --dry-run          # 预览哪些会被请求
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+WORKSPACE = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(WORKSPACE))
+
+from stock_trend.gain_turnover import (
+    _cache_path,
+    get_all_stock_codes,
+    load_qfq_history,
+    normalize_prefixed,
+)
+
+DEFAULT_WORKERS = 16
+DEFAULT_MAX_AGE_HOURS = 6  # 超过6小时未更新则重新拉取
+
+
+def _needs_refresh(path: Path, max_age_hours: float) -> bool:
+    if not path.exists():
+        return True
+    age_hours = (time.time() - path.stat().st_mtime) / 3600.0
+    return age_hours >= max_age_hours
+
+
+def prewarm_qfq_daily(
+    codes: list[str],
+    workers: int = DEFAULT_WORKERS,
+    force_refresh: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
+) -> dict:
+    """
+    预热前复权日线缓存。
+
+    Returns:
+        dict with keys: success, failed, skipped, elapsed_seconds
+    """
+    t0 = time.time()
+    results = {"success": [], "failed": [], "skipped": [], "elapsed_seconds": 0.0}
+
+    to_refresh = []
+    for code in codes:
+        c = normalize_prefixed(code)
+        path = _cache_path(c, adjust="qfq")
+        if force_refresh or _needs_refresh(path, max_age_hours):
+            to_refresh.append(c)
+        else:
+            results["skipped"].append(c)
+
+    total = len(to_refresh)
+    print(
+        f"\n{'[Dry Run] ' if dry_run else ''}前复权日线缓存: "
+        f"{len(to_refresh)} 只要刷新 / {len(results['skipped'])} 只跳过（缓存有效）"
+    )
+    if dry_run:
+        print("以下股票将被请求 AkShare：")
+        for c in to_refresh[:50]:
+            print(f"  {c}")
+        if len(to_refresh) > 50:
+            print(f"  ... 还有 {len(to_refresh)-50} 只")
+        return results
+
+    if not to_refresh:
+        print("全部缓存有效，无需请求。")
+        return results
+
+    done = 0
+
+    def work(code: str):
+        try:
+            df = load_qfq_history(code, adjust="qfq", refresh=True, max_age_hours=0)
+            if df is not None and not df.empty:
+                return code, len(df), None
+            return code, 0, "empty dataframe"
+        except Exception as e:
+            return code, 0, str(e)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(work, code): code for code in to_refresh}
+        for fut in as_completed(futures):
+            code, n_rows, err = fut.result()
+            done += 1
+            if err is None:
+                results["success"].append(code)
+                if verbose:
+                    print(f"  ✓ {code}: {n_rows} 条")
+            else:
+                results["failed"].append((code, err))
+                print(f"  ✗ {code}: {err}")
+            if done % 300 == 0 or done == total:
+                elapsed = time.time() - t0
+                eta = elapsed / done * (total - done) if done else 0
+                print(f"   进度: {done}/{total} ({done/total*100:.1f}%) ETA={eta:.0f}s", end="\r")
+
+    results["elapsed_seconds"] = time.time() - t0
+    print()
+    return results
+
+
+def print_summary(results: dict):
+    print("\n" + "=" * 60)
+    print(f"✅ 成功: {len(results['success'])} 只")
+    if results["failed"]:
+        print(f"❌ 失败: {len(results['failed'])} 只")
+        for code, err in results["failed"][:10]:
+            print(f"   {code}: {err}")
+        if len(results["failed"]) > 10:
+            print(f"   ... 还有 {len(results['failed'])-10} 只失败")
+    print(f"⏭️  跳过: {len(results['skipped'])} 只（缓存有效）")
+    print(f"⏱️  总耗时: {results['elapsed_seconds']:.1f}s")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="前复权日线数据预缓存（每个交易日 16:10 定时执行）")
+    parser.add_argument("--codes", nargs="+", default=None, help="指定股票代码（默认全市场）")
+    parser.add_argument(
+        "--workers", type=int, default=DEFAULT_WORKERS, help=f"并行线程数（默认{DEFAULT_WORKERS}）"
+    )
+    parser.add_argument(
+        "--max-age-hours",
+        type=float,
+        default=DEFAULT_MAX_AGE_HOURS,
+        help=f"缓存超过多少小时视为过期需刷新（默认{DEFAULT_MAX_AGE_HOURS}小时）",
+    )
+    parser.add_argument("--refresh", action="store_true", help="强制刷新所有股票（含未过期）")
+    parser.add_argument("--dry-run", action="store_true", help="只显示哪些会更新，不实际请求")
+    parser.add_argument("-v", "--verbose", action="store_true", help="详细输出（显示每只股票数据条数）")
+    args = parser.parse_args()
+
+    codes = args.codes if args.codes else get_all_stock_codes()
+    print(f"📋 待处理: {len(codes)} 只股票")
+    print(f"⏱️  增量模式：缓存超过 {args.max_age_hours} 小时未更新才刷新")
+
+    results = prewarm_qfq_daily(
+        codes=codes,
+        workers=args.workers,
+        force_refresh=args.refresh,
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+        max_age_hours=args.max_age_hours,
+    )
+    print_summary(results)
