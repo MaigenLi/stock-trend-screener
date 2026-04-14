@@ -45,7 +45,7 @@ from stock_trend.gain_turnover import (
     normalize_prefixed,
 )
 
-DEFAULT_TOP_N = 50
+DEFAULT_TOP_N = 100
 DEFAULT_WORKERS = 8
 DEFAULT_OUTPUT_DIR = Path.home() / "stock_reports"
 
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("--score-threshold", type=float, default=60.0, help="评分门槛")
     parser.add_argument("--max-extension", type=float, default=16.0, help="距MA20最大偏离%%")
     parser.add_argument("--adjust", type=str, default="qfq", choices=["qfq", "", "hfq"], help="复权方式")
-    parser.add_argument("--top-n", type=int, default=50, help="返回前N只")
+    parser.add_argument("--top-n", type=int, default=100, help="返回前N只")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="并行线程数")
     parser.add_argument("--codes", nargs="+", default=None, help="指定股票代码")
     parser.add_argument("--date", type=str, default=None, help="截止日期 YYYY-MM-DD")
