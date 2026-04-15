@@ -745,11 +745,11 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
     lines.append("=" * 160)
     lines.append(f"📊 {title}（共 {len(results)} 只）")
     lines.append("=" * 160)
-    # 主表（技术面）
+    # 主表（技术面）— 列间用 \t 分隔，兼容 webchat
     col_spec = (
-        f"{_rpad('代码',10)} {_rpad('名称',8)} {_rpad('日期',12)} {_rpad('总分',6)} {_rpad('窗口涨幅',9)} "
-        f"{_rpad('20日额(亿)',10)} {_rpad('5日换手',8)} {_rpad('RSI',6)} {_rpad('偏离MA20',9)} "
-        f"{_rpad('收盘',7)} {_rpad('EPS',7)} {_rpad('ROE%%',7)} {_rpad('盈利',5)} {_rpad('扣分',5)}"
+        f"{_rpad('代码',10)}\t{_rpad('名称',8)}\t{_rpad('日期',12)}\t{_rpad('总分',6)}\t{_rpad('窗口涨幅',9)}\t"
+        f"{_rpad('20日额(亿)',10)}\t{_rpad('5日换手',8)}\t{_rpad('RSI',6)}\t{_rpad('偏离MA20',9)}\t"
+        f"{_rpad('收盘',7)}\t{_rpad('EPS',7)}\t{_rpad('ROE%%',7)}\t{_rpad('盈利',5)}\t{_rpad('扣分',5)}"
     )
     lines.append(col_spec)
     lines.append("-" * 160)
@@ -759,28 +759,29 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
         signal_date = r.signal_date or ""
         eps_str = f"{r.fundamental_eps:.3f}" if r.fundamental_eps is not None else "-"
         roe_str = f"{r.fundamental_roe:.2f}" if r.fundamental_roe is not None else "-"
-        profit_str = "✓" if r.fundamental_is_profitable else "✗"
+        profit_str = "✓" if r.fundamental_is_profitable else ("✗" if r.fundamental_is_profitable is False else "-")
         penalty_str = f"-{r.fundamental_penalty}" if r.fundamental_penalty else "-"
-        lines.append(
-            f"{_rpad(code,10)} {_rpad(name,8)} {_rpad(signal_date,12)} {_lpad(f'{r.score:.1f}',6)} "
-            f"{_lpad(f'{r.total_gain_window:+.2f}%',9)} {_lpad(f'{r.avg_amount_20:.2f}',10)} "
-            f"{_lpad(f'{r.avg_turnover_5:.2f}%',8)} {_lpad(f'{r.rsi14:.1f}',6)} "
-            f"{_lpad(f'{r.extension_pct:+.2f}%',9)} {_lpad(f'{r.close:.2f}',7)} "
-            f"{_lpad(eps_str,7)} {_lpad(roe_str,7)} {_lpad(profit_str,5)} {_lpad(penalty_str,5)}"
+        row = (
+            f"{_rpad(code,10)}\t{_rpad(name,8)}\t{_rpad(signal_date,12)}\t{_lpad(f'{r.score:.1f}',6)}\t"
+            f"{_lpad(f'{r.total_gain_window:+.2f}%',9)}\t{_lpad(f'{r.avg_amount_20:.2f}',10)}\t"
+            f"{_lpad(f'{r.avg_turnover_5:.2f}%',8)}\t{_lpad(f'{r.rsi14:.1f}',6)}\t"
+            f"{_lpad(f'{r.extension_pct:+.2f}%',9)}\t{_lpad(f'{r.close:.2f}',7)}\t"
+            f"{_lpad(eps_str,7)}\t{_lpad(roe_str,7)}\t{_lpad(profit_str,5)}\t{_lpad(penalty_str,5)}"
         )
+        lines.append(row)
     lines.append("-" * 160)
     lines.append("评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10 - 基本面扣分")
     # 基本面详情（亏损股摘要）
     loss_stocks = [r for r in results if r.fundamental_penalty > 0]
     if loss_stocks:
         lines.append(f"\n⚠️  亏损/微利股（已扣分，共 {len(loss_stocks)} 只）：")
-        lines.append(f"{'代码':<10} {'名称':<8} {'报告期':<12} {'EPS(元)':>8} {'ROE%%':>7} {'扣分':>5}")
+        lines.append(f"{'代码':<10}\t{'名称':<8}\t{'报告期':<12}\t{'EPS(元)':>8}\t{'ROE%%':>7}\t{'扣分':>5}")
         for r in loss_stocks:
             lines.append(
-                f"{r.code:<10} {r.name:<8} "
-                f"{(r.fundamental_report_date or '-'):<12} "
-                f"{(r.fundamental_eps if r.fundamental_eps is not None else 0):>8.3f} "
-                f"{(r.fundamental_roe if r.fundamental_roe is not None else 0):>7.2f} "
+                f"{r.code:<10}\t{r.name:<8}\t"
+                f"{(r.fundamental_report_date or '-'):<12}\t"
+                f"{(r.fundamental_eps if r.fundamental_eps is not None else 0):>8.3f}\t"
+                f"{(r.fundamental_roe if r.fundamental_roe is not None else 0):>7.2f}\t"
                 f"{r.fundamental_penalty:>5}"
             )
     return "\n".join(lines)

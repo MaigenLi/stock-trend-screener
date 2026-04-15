@@ -7,9 +7,9 @@
 真实回报率定义：T+1 开盘价买入 → T+1 收盘价卖出（持有1天）。
 
 用法：
-  python signal_validator.py                                    # 自动找昨日输出文件
+  python signal_validator.py                                          # 自动找昨日输出文件
   python signal_validator.py --input daily_screen_2026-04-11.txt
-  python signal_validator.py --codes sz002990 sz000001        # 指定个股
+  python signal_validator.py --codes sz002990 sz000001             # 指定个股
 """
 
 from __future__ import annotations
@@ -72,16 +72,39 @@ class SignalValidation:
 
 
 # ── 解析昨日选股输出文件 ──────────────────────────────────
-def parse_screen_output(path: Path) -> list[tuple[str, str]]:
+def parse_screen_output(path: Path) -> list[tuple[str, str, str, float]]:
+    """
+    解析选股结果文件，返回 (code, name, signal_date, signal_close) 列表。
+    文件列顺序（固定）：
+      0=代码 1=名称 2=日期 3=总分 4=窗口涨幅 5=20日额 6=5日换手 7=RSI 8=偏离MA20 9=收盘 10+=EPS/ROE...
+    示例行：
+      sz002866 传艺科技 2026-04-13 92.2 +4.92% 4.97 16.94% 62.5 +7.75% 22.75 - - ✗ -
+    """
     results = []
+    date_pat = re.compile(r"^(\d{4}-\d{2}-\d{2})$")
+    code_pat = re.compile(r"^(sh|sz|bj)(\d{6})$")
+
     for line in path.read_text(encoding="utf-8").splitlines():
         parts = line.strip().split()
-        if len(parts) < 2:
+        if len(parts) < 10:
             continue
-        m = re.match(r"^(sh|sz|bj)(\d{6})$", parts[0].lower())
-        if not m:
+        m_code = code_pat.match(parts[0].lower())
+        if not m_code:
             continue
-        results.append((f"{m.group(1)}{m.group(2)}", parts[1]))
+        code = f"{m_code.group(1)}{m_code.group(2)}"
+        name = parts[1]
+        # 信号日：parts[2] 必为 YYYY-MM-DD
+        if not date_pat.match(parts[2]):
+            continue
+        sig_date = parts[2]
+        # 收盘价固定在 parts[9]（列位置固定）
+        try:
+            sig_close = float(parts[9])
+            if sig_close <= 0:
+                continue
+        except ValueError:
+            continue
+        results.append((code, name, sig_date, sig_close))
     return results
 
 
@@ -125,11 +148,13 @@ def validate_signal(
     open_gap = (open_today - signal_close) / signal_close * 100.0
 
     # 止盈止损（均以 signal_close 为基准）
+    # 止盈：日内高点突破即算触发
     hit_3pct = high_today >= signal_close * 1.03
     hit_5pct = high_today >= signal_close * 1.05
     hit_7pct = high_today >= signal_close * 1.07
     hit_10pct = high_today >= signal_close * 1.10
-    stop_loss = low_today <= signal_close * 0.98
+    # 止损：需收盘跌破止损线才算（盘中刺破但收回复活不算）
+    stop_loss = close_today <= signal_close * 0.98
 
     # 质量评分（基于 ret_actual）
     score = 50.0
@@ -187,42 +212,48 @@ def find_latest_screen_output() -> Optional[Path]:
     """
     找昨日的选股结果文件（以文件内日期为准，而非文件修改时间）。
     16:40 执行时，今日 screening 大概率还在运行中，取前一天的输出最准确。
+    支持格式：
+      - daily_screen_YYYY-MM-DD.txt（gain_turnover_screen.py 默认输出）
+      - daily_screen_YYYY-MM-DD.txt
     """
     reports_dir = Path.home() / "stock_reports"
     today = datetime.now()
-    candidates = list(reports_dir.glob("daily_screen_*.txt"))
+    from datetime import timedelta
+    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # 支持两种文件名格式
+    patterns = ["daily_screen_*.txt"]
+    candidates: list[Path] = []
+    for pat in patterns:
+        candidates.extend(reports_dir.glob(pat))
+
     if not candidates:
         return None
 
     # 优先：找到昨天日期的文件
-    from datetime import timedelta
-    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
     for p in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
-        # 文件名格式：daily_screen_YYYY-MM-DD.txt
         fname = p.name
         m = re.search(r"(\d{4}-\d{2}-\d{2})", fname)
-        if m:
-            file_date = m.group(1)
-            if file_date == yesterday:
-                return p
+        if m and m.group(1) == yesterday:
+            return p
 
     # 兜底：没有昨天的文件，则取最新修改的文件
     return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
 
 def run_validation(
-    codes: list[tuple[str, str]],
+    codes: list[tuple[str, str, str, float]],
 ) -> list[SignalValidation]:
+    """
+    codes: (code, name, signal_date, signal_close)
+    signal_date: 信号发出的日期（筛选数据截止日）
+    signal_close: 信号日收盘价
+    """
     t0 = time.time()
     validations = []
 
-    for code, name in codes:
+    for code, name, sig_date, sig_close in codes:
         c = normalize_prefixed(code)
-        df = load_qfq_history(c, max_age_hours=0)
-        if df is None or df.empty:
-            continue
-        sig_close = float(df.iloc[-1]["close"])
-        sig_date = str(df.iloc[-1]["date"])[:10]
         result = validate_signal(c, name, sig_date, sig_close)
         if result:
             validations.append(result)
@@ -262,22 +293,47 @@ def format_report(validations: list[SignalValidation]) -> str:
             f"止损={sum(1 for v in validations if v.stop_loss)}"
         )
     lines.append("-" * 130)
-    lines.append(
-        f"{'代码':<12} {'名称':<8} {'信号日':<12} {'信号价':>7} {'今开':>7} {'今收':>7} "
-        f"{'真实收益':>8} {'参收益':>8} {'高涨':>7} {'+3':>4} {'+5':>4} "
-        f"{'止损':>4} {'评分':>6} {'评价':>8}"
+
+    # 列宽定义（用于填充宽度计算）
+    # 标题行（webchat 会压缩连续空格，列间用 \t 保证结构可辨认）
+    hdr = (
+        f"{'代码':<12}"
+        f"\t{'名称':<10}"
+        f"\t{'信号日':<12}"
+        f"\t{'信号价':>8}"
+        f"\t{'今开':>8}"
+        f"\t{'今收':>8}"
+        f"\t{'真实收益':>8}"
+        f"\t{'参收益':>8}"
+        f"\t{'高涨':>8}"
+        f"\t{'+3':>3}"
+        f"\t{'+5':>3}"
+        f"\t{'止损':>4}"
+        f"\t{'评分':>6}"
+        f"\t{'评价':>8}"
     )
+    lines.append(hdr)
     lines.append("-" * 130)
+
+    # 数据行
     for v in validations:
-        lines.append(
-            f"{v.code:<12} {v.name:<8} {v.signal_date:<12} {v.signal_close:>7.2f} "
-            f"{v.open_today:>7.2f} {v.close_today:>7.2f} "
-            f"{v.ret_actual:>+8.2f} {v.ret_signal:>+8.2f} {v.ret_high:>+7.2f} "
-            f"{'✓' if v.hit_3pct else '-':>4} "
-            f"{'✓' if v.hit_5pct else '-':>4} "
-            f"{'✓' if v.stop_loss else '-':>4} "
-            f"{v.quality_score:>6.1f} {v.evolution_tag:>8}"
+        row = (
+            f"{v.code:<12}"
+            f"\t{v.name:<10}"
+            f"\t{v.signal_date:<12}"
+            f"\t{v.signal_close:>8.2f}"
+            f"\t{v.open_today:>8.2f}"
+            f"\t{v.close_today:>8.2f}"
+            f"\t{v.ret_actual:>+8.2f}"
+            f"\t{v.ret_signal:>+8.2f}"
+            f"\t{v.ret_high:>+8.2f}"
+            f"\t{'✓' if v.hit_3pct else '-':>3}"
+            f"\t{'✓' if v.hit_5pct else '-':>3}"
+            f"\t{'✓' if v.stop_loss else '-':>4}"
+            f"\t{v.quality_score:>6.1f}"
+            f"\t{v.evolution_tag:>8}"
         )
+        lines.append(row)
     lines.append("-" * 130)
     lines.append("注: 真实收益=T+1开盘买入→T+1收盘卖出(持有1天)  参收益=信号收盘→T+1收盘(参考)")
     lines.append("评价: 🟢优秀≥85  🔵良好≥70  🟡及格≥55  🔴失效<55")
@@ -289,19 +345,21 @@ def format_report(validations: list[SignalValidation]) -> str:
             reasons = []
             if v.stop_loss:
                 reasons.append("触发-2%止损")
-            if v.ret_actual < -2:
-                reasons.append(f"收盘{(v.ret_actual):+.1f}%")
+            if v.ret_actual < 0:
+                reasons.append(f"收盘{v.ret_actual:+.1f}%")
             gap = (v.open_today - v.signal_close) / v.signal_close * 100
             if gap >= 5:
                 reasons.append(f"跳空高开{gap:.1f}%")
-            lines.append(f"  {v.code} {v.name}: {'; '.join(reasons) or '综合原因'}")
+            if not reasons:
+                reasons.append(f"评分过低({v.quality_score:.0f})")
+            lines.append(f"  {v.code} {v.name}: {'; '.join(reasons)}")
     else:
         lines.append("  无失效股")
 
     lines.append("\n─── 评分分布 ───")
     for lo, hi, lbl in [(85, 100, "🟢优秀"), (70, 85, "🔵良好"), (55, 70, "🟡及格"), (0, 55, "🔴失效")]:
         count = sum(1 for s in validations if lo <= s.quality_score < hi)
-        lines.append(f"  {lbl} ({lo}-{hi}): {count:>3} {'█' * count}")
+        lines.append(f"  {lbl} ({lo}-{hi}): {count:>3}")
     return "\n".join(lines)
 
 

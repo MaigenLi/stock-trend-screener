@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -165,6 +166,13 @@ if __name__ == "__main__":
         refresh_cache=args.refresh_cache,
     )
 
+    # 过滤 ST/*ST（排除风险警示股票）
+    pre_filter = len(results)
+    results = [r for r in results if not (r.name and re.search(r'ST\*?', r.name))]
+    post_filter = len(results)
+    if post_filter < pre_filter:
+        print(f"\n⚠️  已过滤 ST/*ST 个股 {pre_filter - post_filter} 只")
+
     title_date = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
     fund_tag = "+基本面" if config.check_fundamental else ""
     title = (
@@ -174,7 +182,7 @@ if __name__ == "__main__":
     output_text = format_signal_results(results, title)
     print("\n" + output_text)
 
-    output_path = Path(args.output) if args.output else DEFAULT_OUTPUT_DIR / f"gain_screen_upgrade_{title_date}.txt"
+    output_path = Path(args.output) if args.output else DEFAULT_OUTPUT_DIR / f"daily_screen_{title_date}.txt"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(output_text)
