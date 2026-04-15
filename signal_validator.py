@@ -126,6 +126,11 @@ def validate_signal(
     sig_ts = pd.Timestamp(signal_date)
     post = df[df["date"] > sig_ts]       # T+1 及之后
     if post.empty:
+        # T+1 数据尚未就绪（常见于收盘后 1-2 小时内）
+        latest_date = df["date"].max().strftime("%Y-%m-%d")
+        if latest_date <= signal_date:
+            # 最新数据不晚于信号日，说明今天数据确实未更新
+            print(f"  ⚠️ {code} {name}: T+1 数据未就绪（最新 {latest_date} ≤ 信号 {signal_date}）")
         return None
     today_row = post.iloc[0]             # T+1 当天
 
@@ -251,12 +256,15 @@ def run_validation(
     """
     t0 = time.time()
     validations = []
+    skipped = 0
 
     for code, name, sig_date, sig_close in codes:
         c = normalize_prefixed(code)
         result = validate_signal(c, name, sig_date, sig_close)
         if result:
             validations.append(result)
+        else:
+            skipped += 1
 
     validations.sort(key=lambda x: x.quality_score, reverse=True)
 
@@ -272,6 +280,13 @@ def run_validation(
             f"+5%={sum(1 for v in validations if v.hit_5pct)}  "
             f"止损={sum(1 for v in validations if v.stop_loss)}"
         )
+    else:
+        print(f"\n📊 信号验证（0 只）| {time.time()-t0:.1f}s")
+    
+    if skipped > 0:
+        print(f"  ⚠️  跳过 {skipped} 只（T+1 数据未就绪）")
+        print(f"  💡 建议：等待 cache_qfq_daily.py 更新今日数据（16:10 后）或稍后重试")
+    
     return validations
 
 

@@ -20,6 +20,7 @@ import argparse
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 WORKSPACE = Path(__file__).parent.parent.resolve()
@@ -119,7 +120,84 @@ def prewarm_qfq_daily(
     return results
 
 
-def print_summary(results: dict):
+def _get_cache_latest_date(code: str) -> str | None:
+    """返回缓存文件最新日期字符串（如 '2026-04-15'），不存在返回 None。"""
+    path = _cache_path(code, adjust="qfq")
+    if not path.exists():
+        return None
+    try:
+        import pandas as pd
+        df = pd.read_csv(path, parse_dates=["date"])
+        if df is None or df.empty:
+            return None
+        return df["date"].max().strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def verify_and_retry_stale(
+    codes: list[str],
+    today_str: str,
+    workers: int = DEFAULT_WORKERS,
+    verbose: bool = False,
+) -> dict:
+    """
+    检查 codes 中每只股票的缓存是否已更新到 today_str。
+    未更新的自动重试一次，仍未更新则报告（可能是停牌）。
+    返回 dict: verified_ok, retried_ok, still_stale
+    """
+    verified_ok = []
+    retried_ok = []
+    still_stale = []
+
+    # 第一轮：快速检查所有缓存日期
+    stale_codes = []
+    for code in codes:
+        c = normalize_prefixed(code)
+        latest = _get_cache_latest_date(c)
+        if latest is None or latest < today_str:
+            stale_codes.append(c)
+        else:
+            verified_ok.append(c)
+
+    if not stale_codes:
+        return {"verified_ok": verified_ok, "retried_ok": retried_ok, "still_stale": still_stale}
+
+    print(f"\n🔍 验证完成: {len(verified_ok)} 只已有今日数据，{len(stale_codes)} 只缓存较旧，进行重试...")
+
+    # 重试拉取
+    def work(code: str):
+        try:
+            df = load_qfq_history(code, adjust="qfq", refresh=True, max_age_hours=0)
+            if df is not None and not df.empty:
+                latest = df["date"].max().strftime("%Y-%m-%d")
+                return code, latest, None
+            return code, None, "empty"
+        except Exception as e:
+            return code, None, str(e)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(work, code): code for code in stale_codes}
+        for fut in as_completed(futures):
+            code, latest, err = fut.result()
+            done += 1
+            if latest is not None and latest >= today_str:
+                retried_ok.append(code)
+                if verbose:
+                    print(f"  ✓ {code}: 重试成功，最新 {latest}")
+            else:
+                still_stale.append((code, latest, err))
+                if verbose:
+                    print(f"  ✗ {code}: 仍未更新到今日（最新 {latest}），可能停牌")
+            if done % 300 == 0 or done == len(stale_codes):
+                print(f"   重试进度: {done}/{len(stale_codes)}", end="\r")
+
+    print()
+    return {"verified_ok": verified_ok, "retried_ok": retried_ok, "still_stale": still_stale}
+
+
+def print_summary(results: dict, verify_result: dict | None = None):
     print("\n" + "=" * 60)
     print(f"✅ 成功: {len(results['success'])} 只")
     if results["failed"]:
@@ -130,6 +208,19 @@ def print_summary(results: dict):
             print(f"   ... 还有 {len(results['failed'])-10} 只失败")
     print(f"⏭️  跳过: {len(results['skipped'])} 只（缓存有效）")
     print(f"⏱️  总耗时: {results['elapsed_seconds']:.1f}s")
+
+    if verify_result:
+        vr = verify_result
+        total_ok = len(vr["verified_ok"]) + len(vr["retried_ok"])
+        print("\n" + "=" * 60)
+        print(f"📊 数据新鲜度验证（今日= {datetime.now().strftime('%Y-%m-%d')}）")
+        print(f"   ✅ 已有今日数据: {total_ok} 只（首次成功 {len(vr['verified_ok'])} + 重试成功 {len(vr['retried_ok'])})")
+        if vr["still_stale"]:
+            print(f"   ⚠️  仍未更新（疑似停牌）: {len(vr['still_stale'])} 只")
+            for code, latest, err in vr["still_stale"][:10]:
+                print(f"      {code}: 最新 {latest} | {err}")
+            if len(vr["still_stale"]) > 10:
+                print(f"      ... 还有 {len(vr['still_stale'])-10} 只")
 
 
 if __name__ == "__main__":
@@ -147,6 +238,7 @@ if __name__ == "__main__":
     parser.add_argument("--refresh", action="store_true", help="强制刷新所有股票（含未过期）")
     parser.add_argument("--dry-run", action="store_true", help="只显示哪些会更新，不实际请求")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出（显示每只股票数据条数）")
+    parser.add_argument("--verify", action="store_true", help="刷新后验证所有缓存是否更新到今日（自动重试失败项）")
     args = parser.parse_args()
 
     codes = args.codes if args.codes else get_all_stock_codes()
@@ -164,4 +256,14 @@ if __name__ == "__main__":
         verbose=args.verbose,
         max_age_hours=args.max_age_hours,
     )
-    print_summary(results)
+
+    verify_result = None
+    if args.verify and not args.dry_run:
+        verify_result = verify_and_retry_stale(
+            codes=codes,
+            today_str=datetime.now().strftime("%Y-%m-%d"),
+            workers=args.workers,
+            verbose=args.verbose,
+        )
+
+    print_summary(results, verify_result)
