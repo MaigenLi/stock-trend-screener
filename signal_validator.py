@@ -163,7 +163,15 @@ def validate_signal(
 
     # 质量评分（基于 ret_actual）
     score = 50.0
-    if ret_actual >= 2.0:
+    if ret_actual >= 6.0:
+        score += 35.0
+    elif ret_actual >= 5.0:
+        score += 30.0
+    elif ret_actual >= 4.0:
+        score += 25.0
+    elif ret_actual >= 3.0:
+        score += 20.0
+    elif ret_actual >= 2.0:
         score += 15.0
     elif ret_actual >= 0:
         score += 8.0

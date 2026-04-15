@@ -326,13 +326,13 @@ def parse_screen_table(raw: str) -> list[dict]:
 def get_validation_results() -> tuple[str, str, list]:
     today = datetime.now()
     from datetime import timedelta
-    yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-    val_file = REPORTS_DIR / f"signal_validation_{yesterday}.txt"
+    today_str = today.strftime("%Y-%m-%d")
+    val_file = REPORTS_DIR / f"signal_validation_{today_str}.txt"
     if not val_file.exists():
-        today_str = today.strftime("%Y-%m-%d")
-        val_file = REPORTS_DIR / f"signal_validation_{today_str}.txt"
+        yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        val_file = REPORTS_DIR / f"signal_validation_{yesterday}.txt"
     if not val_file.exists():
-        return "（昨日验证报告未找到）", "", []
+        return "（今日验证报告未找到）", "", []
     text = val_file.read_text(encoding="utf-8")
     rows = []
     import re
