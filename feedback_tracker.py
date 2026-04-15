@@ -45,7 +45,7 @@ from stock_trend.gain_turnover import (
     normalize_prefixed,
 )
 
-TRACKER_CSV = WORKSPACE / "stock_trend" / "feedback_tracker.csv"
+TRACKER_CSV = Path.home() / "stock_reports" / "feedback_tracker.csv"
 FIELDS = [
     "signal_date", "code", "name", "signal_close",
     "verified_date", "open_verified", "close_verified", "high_verified",

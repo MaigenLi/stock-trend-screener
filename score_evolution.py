@@ -30,7 +30,7 @@ import numpy as np
 WORKSPACE = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
 
-TRACKER_CSV = WORKSPACE / "stock_trend" / "feedback_tracker.csv"
+TRACKER_CSV = Path.home() / "stock_reports" / "feedback_tracker.csv"
 PARAM_GRID = {
     "signal_days": [2, 3],
     "min_gain": [1.5, 2.0, 2.5],
@@ -41,7 +41,7 @@ PARAM_GRID = {
     "max_extension": [10, 12, 16],
 }
 MIN_SAMPLES = 20  # 每个组合最少样本量才参与分析
-EVOLUTION_CSV = WORKSPACE / "stock_trend" / "evolution_history.csv"
+EVOLUTION_CSV = Path.home() / "stock_reports" / "evolution_history.csv"
 EVOLUTION_FIELDS = [
     "date", "param_changed", "old_value", "new_value",
     "reason", "expected_winrate_change", "confirmed",
