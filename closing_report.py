@@ -593,6 +593,43 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
         story.append(Paragraph("（验证报告为空）", BODY_STYLE))
     story.append(Spacer(1, 0.3*cm))
 
+    # ── 评分分布 ───────────────────────────────────────
+    if val_rows:
+        # 用 tag 字段统计各等级数量
+        tags = [r.get("tag", "") for r in val_rows]
+        cnt_green  = sum(1 for t in tags if "🟢" in t)
+        cnt_blue   = sum(1 for t in tags if "🔵" in t)
+        cnt_yellow = sum(1 for t in tags if "🟡" in t)
+        cnt_red    = sum(1 for t in tags if "🔴" in t)
+
+        def _dist_cell(text, bg, fc):
+            p = ParagraphStyle("_d", fontName="SimHei", fontSize=9, bold=True,
+                              textColor=fc, alignment=TA_CENTER, leading=13)
+            t = Table([[Paragraph(text, p)]], colWidths=[TEXT_W / 4])
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0,0), (-1,-1), bg),
+                ("BOX",           (0,0), (-1,-1), 0.5, HexColor("#cccccc")),
+                ("TOPPADDING",   (0,0), (-1,-1), 6),
+                ("BOTTOMPADDING",(0,0), (-1,-1), 6),
+            ]))
+            return t
+
+        dist_row = [
+            _dist_cell(f"🟢优秀\n{cnt_green} 只",  HexColor("#e8f5e9"), HexColor("#1b5e20")),
+            _dist_cell(f"🔵良好\n{cnt_blue} 只",   HexColor("#e3f2fd"), HexColor("#0d47a1")),
+            _dist_cell(f"🟡及格\n{cnt_yellow} 只", HexColor("#fff8e1"), HexColor("#e65100")),
+            _dist_cell(f"🔴失效\n{cnt_red} 只",   HexColor("#ffebee"), HexColor("#b71c1c")),
+        ]
+        dist_tbl = Table([dist_row], colWidths=[TEXT_W / 4] * 4)
+        dist_tbl.setStyle(TableStyle([
+            ("LEFTPADDING",  (0,0), (-1,-1), 3),
+            ("RIGHTPADDING", (0,0), (-1,-1), 3),
+            ("TOPPADDING",   (0,0), (-1,-1), 0),
+            ("BOTTOMPADDING",(0,0), (-1,-1), 0),
+        ]))
+        story.append(dist_tbl)
+        story.append(Spacer(1, 0.2*cm))
+
     # 评分说明
     story.append(note_block(
         "评分标准（基于 T+1 真实收益）：🟢优秀≥85  🔵良好≥70  🟡及格≥55  🔴失效<55  |  "
