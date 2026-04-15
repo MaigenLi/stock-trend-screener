@@ -178,8 +178,6 @@ def validate_signal(
     else:
         score -= 20.0
     if hit_5pct:
-        score += 15.0
-    if hit_7pct:
         score += 10.0
     if stop_loss:
         score -= 15.0
