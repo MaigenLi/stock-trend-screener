@@ -151,7 +151,10 @@ if __name__ == "__main__":
 
     codes = args.codes if args.codes else get_all_stock_codes()
     print(f"📋 待处理: {len(codes)} 只股票")
-    print(f"⏱️  增量模式：缓存超过 {args.max_age_hours} 小时未更新才刷新")
+    if args.refresh:
+        print(f"🔄 强制刷新模式：所有股票重新拉取（无视缓存时效）")
+    else:
+        print(f"⏱️  增量模式：缓存超过 {args.max_age_hours} 小时未更新才刷新")
 
     results = prewarm_qfq_daily(
         codes=codes,
