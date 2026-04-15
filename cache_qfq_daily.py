@@ -238,15 +238,21 @@ if __name__ == "__main__":
     parser.add_argument("--refresh", action="store_true", help="强制刷新所有股票（含未过期）")
     parser.add_argument("--dry-run", action="store_true", help="只显示哪些会更新，不实际请求")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出（显示每只股票数据条数）")
-    parser.add_argument("--verify", action="store_true", help="刷新后验证所有缓存是否更新到今日（自动重试失败项）")
+    parser.add_argument("--verify", action="store_true", default=None, help="刷新后验证所有缓存是否更新到今日（自动重试失败项，--refresh 时默认开启）")
+    parser.add_argument("--no-verify", action="store_true", help="禁用刷新后验证")
     args = parser.parse_args()
+
+    # --refresh 时默认开启验证，除非明确用 --no-verify 禁用
+    do_verify = args.verify if args.verify is not None else args.refresh
+    do_verify = do_verify and not args.no_verify
 
     codes = args.codes if args.codes else get_all_stock_codes()
     print(f"📋 待处理: {len(codes)} 只股票")
     if args.refresh:
-        print(f"🔄 强制刷新模式：所有股票重新拉取（无视缓存时效）")
+        mode_str = f"🔄 强制刷新模式（{'✅验证开启' if do_verify else '⏭️ 验证关闭'}）"
     else:
-        print(f"⏱️  增量模式：缓存超过 {args.max_age_hours} 小时未更新才刷新")
+        mode_str = f"⏱️  增量模式：缓存超过 {args.max_age_hours} 小时未更新才刷新"
+    print(mode_str)
 
     results = prewarm_qfq_daily(
         codes=codes,
@@ -258,7 +264,7 @@ if __name__ == "__main__":
     )
 
     verify_result = None
-    if args.verify and not args.dry_run:
+    if do_verify and not args.dry_run:
         verify_result = verify_and_retry_stale(
             codes=codes,
             today_str=datetime.now().strftime("%Y-%m-%d"),
