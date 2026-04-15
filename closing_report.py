@@ -79,32 +79,35 @@ except Exception as e:
     BASE_FONT = "Helvetica"
 
 PAGE_W, PAGE_H = A4
-MARGIN = 1.8 * cm
+MARGIN = 1.5 * cm
 TEXT_W = PAGE_W - 2 * MARGIN
 
+C_H1     = HexColor("#0f3460")   # 封面/H1/H2 背景（同 md2pdf）
 C_BLUE   = HexColor("#0f3460")
-C_SECTION= HexColor("#16213e")
+C_H3     = HexColor("#1a237e")   # H3 背景
+C_SECTION= HexColor("#0f3460")   # 区块标题背景（对齐 md2pdf H2）
 C_LIGHT  = HexColor("#f5f5f5")
 C_BORDER = HexColor("#cccccc")
 C_DARK   = HexColor("#1a1a2e")
 C_WARN   = HexColor("#fff8e1")
+C_CODE   = HexColor("#1e1e1e")   # 代码块背景
 
 def S(size, leading=None, color=black, align=TA_LEFT, bold=False):
     fn = "SimHei-Bold" if bold else "SimHei"
     return ParagraphStyle(
         "s", fontName=fn, fontSize=size,
-        leading=leading or size * 1.35,
+        leading=leading or size * 1.45,   # 对齐 md2pdf: 1.45× 行高
         textColor=color, alignment=align
     )
 
-TITLE_STYLE = S(20, bold=True, color=white, align=TA_CENTER)
+TITLE_STYLE = S(22, bold=True, color=white, align=TA_CENTER)  # md2pdf封面: 22pt
 SUB_STYLE   = S(10, color=HexColor("#cccccc"), align=TA_CENTER)
-SEC_STYLE   = S(13, bold=True, color=white)
-BODY_STYLE  = S(9, color=black)
+SEC_STYLE   = S(11, bold=True, color=white)    # md2pdf H2: 11pt bold
+BODY_STYLE  = S(9, color=black)                # md2pdf 正文: 9pt
 WARN_STYLE  = S(8.5, color=HexColor("#555555"))
 TAG_STYLE   = S(8.5, color=HexColor("#222222"))
-HDR_STYLE   = S(8.5, color=white)  # 表格表头白字
-CELL_STYLE  = S(8.5, color=black)
+HDR_STYLE   = S(8, bold=True, color=white)     # md2pdf 表头: 8pt bold
+CELL_STYLE  = S(8, color=black)                # md2pdf 表格: 8pt
 SMALL_STYLE = S(8, color=HexColor("#555555"), align=TA_CENTER)
 INDEX_STYLE = S(10, color=C_DARK, bold=True)
 GREEN_STYLE= S(10, color=HexColor("#2e7d32"), bold=True)
@@ -115,11 +118,11 @@ def title_block(title: str, subtitle: str) -> Table:
     inner = [Paragraph(title, TITLE_STYLE), Paragraph(subtitle, SUB_STYLE)]
     tbl = Table([[inner]], colWidths=[TEXT_W])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), C_BLUE),
-        ("TOPPADDING",   (0,0), (-1,-1), 14),
-        ("BOTTOMPADDING",(0,0), (-1,-1), 14),
-        ("LEFTPADDING",  (0,0), (-1,-1), 14),
-        ("RIGHTPADDING", (0,0), (-1,-1), 14),
+        ("BACKGROUND",    (0,0), (-1,-1), C_H1),   # md2pdf封面: #0f3460
+        ("TOPPADDING",   (0,0), (-1,-1), 22),
+        ("BOTTOMPADDING",(0,0), (-1,-1), 22),
+        ("LEFTPADDING",  (0,0), (-1,-1), 16),
+        ("RIGHTPADDING", (0,0), (-1,-1), 16),
     ]))
     return tbl
 
