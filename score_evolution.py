@@ -382,7 +382,7 @@ if __name__ == "__main__":
     if args.output:
         out = Path(args.output)
     else:
-        out = WORKSPACE / "stock_trend" / f"evolution_report_{date_str}.txt"
+        out = Path.home() / "stock_reports" / f"evolution_report_{date_str}.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report_text, encoding="utf-8")
     print(f"\n💾 报告已写入: {out.resolve()}")
