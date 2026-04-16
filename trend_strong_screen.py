@@ -130,7 +130,8 @@ def get_index_kline(code: str, days: int = 25,
     if df is None or len(df) < days:
         return None
     if target_date is not None:
-        ts = pd.Timestamp(target_date.date())
+        from datetime import date as DateClass
+        ts = target_date.date() if hasattr(target_date, "date") else target_date
         df = df[df["date"] <= ts]
         if df.empty:
             return None
