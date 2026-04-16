@@ -634,6 +634,8 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help=f"并行线程数（默认{DEFAULT_WORKERS}）")
     parser.add_argument("--date", type=str, default=None,
                         help="指定截止日期（YYYY-MM-DD），默认当前/最近交易日")
+    parser.add_argument("--output", "-o", type=str, default=None,
+                        help="输出文件路径（默认 ~/stock_reports/trend_strong_YYYY-MM-DD.txt）")
     args = parser.parse_args()
 
     # 解析目标日期
@@ -670,5 +672,26 @@ if __name__ == "__main__":
     )
 
     # 输出
-    title = f"趋势强势股 v2（{target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')}）"
-    print_result(results, title=title)
+    date_str = target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
+    title = f"趋势强势股 v2（{date_str}）"
+
+    # 捕获输出写入文件
+    import io, contextlib
+    output_buffer = io.StringIO()
+    with contextlib.redirect_stdout(output_buffer):
+        print_result(results, title=title)
+    output_text = output_buffer.getvalue()
+
+    # 打印到终端
+    print(output_text)
+
+    # 保存到文件
+    output_path = args.output
+    if output_path is None:
+        out_dir = Path.home() / "stock_reports"
+        out_dir.mkdir(exist_ok=True)
+        output_path = out_dir / f"trend_strong_{date_str}.txt"
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(output_text)
+    print(f"💾 结果已保存: {output_path}")

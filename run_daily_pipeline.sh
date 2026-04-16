@@ -37,8 +37,8 @@ echo "[$(date '+%H:%M:%S')] 步骤4完成，休息60秒..."
 sleep 60
 
 # 步骤5：选股筛选
-echo "[$(date '+%H:%M:%S')] 步骤5/6: gain_turnover_screen.py --check-fundamental"
-${PYTHON} ${WORKSPACE}/gain_turnover_screen.py --check-fundamental >> ${LOG_DIR}/daily_screen.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤5/6: gain_turnover_screen.py --check-fundamental --sector-bonus"
+${PYTHON} ${WORKSPACE}/gain_turnover_screen.py --check-fundamental --sector-bonus --days 3 --max-gain 8 --top-n 200 >> ${LOG_DIR}/daily_screen.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤5完成，休息60秒..."
 sleep 60
 
