@@ -200,6 +200,7 @@ class StrategyConfig:
     sector_top_n: int = 15             # 前N名板块视为热门板块
     sector_bonus_pts: float = 8.0      # 热门板块加分分值
     check_volume_surge: bool = False  # 是否检查质量窗口内明显放量（默认关闭）
+    volume_surge_ratio: float = 1.8  # 放量倍数阈值（默认1.8倍）
 
 
 @dataclass
@@ -669,7 +670,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
                         max_5d_avg = window_avg
             quality_20d_avg = float(np.nanmean(quality_amounts))
             # 必须有明显放量：最大5日区间 > 20日均值的1.8倍
-            if max_5d_avg < quality_20d_avg * 1.8:
+            if max_5d_avg < quality_20d_avg * config.volume_surge_ratio:
                 return None
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
