@@ -45,5 +45,11 @@ sleep 60
 # 步骤6：收盘报告
 echo "[$(date '+%H:%M:%S')] 步骤6/6: closing_report.py"
 ${PYTHON} ${WORKSPACE}/closing_report.py >> ${LOG_DIR}/closing_report.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤6完成，休息60秒..."
+sleep 60
+
+# 步骤7：趋势强势股扫描
+echo "[$(date '+%H:%M:%S')] 步骤7/7: trend_strong_screen.py --top-n 100"
+${PYTHON} ${WORKSPACE}/trend_strong_screen.py --top-n 100 >> ${LOG_DIR}/trend_strong.log 2>&1
 
 echo "========== 每日收盘流水线完成 [$(date '+%H:%M:%S')] =========="
