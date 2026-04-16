@@ -661,16 +661,22 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         quality_amounts = prepared.amount[q_start: idx + 1]
         if len(quality_amounts) >= 5:
             # 滑动窗口：1-5 vs 6-10，2-6 vs 7-11，3-7 vs 8-12，...
-            # 只要有任意一组满足放大倍数，即为放量
+            # 成交额放大 volume_surge_ratio 倍 OR 换手率（5日均值）>= 10%，满足任一即为放量
             n = len(quality_amounts)
             found_surge = False
-            for i in range(n - 9):   # 需要i+9 < n，即i <= n-10
-                prev_avg = float(np.nanmean(quality_amounts[i:i+5]))
-                curr_avg = float(np.nanmean(quality_amounts[i+5:i+10]))
-                if not (np.isnan(prev_avg) or np.isnan(curr_avg) or prev_avg <= 0):
-                    if curr_avg >= prev_avg * config.volume_surge_ratio:
-                        found_surge = True
-                        break
+            for i in range(n - 9):
+                prev_amt = float(np.nanmean(quality_amounts[i:i+5]))
+                curr_amt = float(np.nanmean(quality_amounts[i+5:i+10]))
+                # 成交额放大
+                amt_ok = (not np.isnan(prev_amt)) and (not np.isnan(curr_amt)) \
+                         and (prev_amt > 0) and (curr_amt >= prev_amt * config.volume_surge_ratio)
+                # 换手率：当前5日窗口均值 >= 10%
+                turn_vals = prepared.avg_turnover_5[q_start + i + 5: q_start + i + 10]
+                curr_turn_avg = float(np.nanmean(turn_vals)) if len(turn_vals) > 0 else 0.0
+                turn_ok = (not np.isnan(curr_turn_avg)) and (curr_turn_avg >= 10.0)
+                if amt_ok or turn_ok:
+                    found_surge = True
+                    break
             if not found_surge:
                 return None
 
