@@ -716,15 +716,42 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     # 3) 趋势质量 25
     trend = 0.0
     trend += 10.0  # close > ma5 > ma10 已过滤
-    if ma20 > prepared.ma20[idx - 10]:
-        trend += 7.0
+    # ── 上升形态加分 ─────────────────────────────────
+    # MA5 持续上涨
+    ma5_5d_ago = prepared.ma5[idx - 5]
+    if not np.isnan(ma5_5d_ago) and ma5 > ma5_5d_ago * 1.01:   # 5日内上涨 >1%
+        trend += 3.0
+    elif not np.isnan(ma5_5d_ago) and ma5 > ma5_5d_ago:
+        trend += 1.5
+    # MA10 持续上涨
+    ma10_5d_ago = prepared.ma10[idx - 5]
+    if not np.isnan(ma10_5d_ago) and ma10 > ma10_5d_ago * 1.01:  # 5日内上涨 >1%
+        trend += 3.0
+    elif not np.isnan(ma10_5d_ago) and ma10 > ma10_5d_ago:
+        trend += 1.5
+    # MA20 加速上涨
+    ma20_10d_ago = prepared.ma20[idx - 10]
+    if not np.isnan(ma20_10d_ago) and ma20 > ma20_10d_ago * 1.02:  # 10日内上涨 >2%
+        trend += 4.0
+    elif not np.isnan(ma20_10d_ago) and ma20 > ma20_10d_ago:
+        trend += 2.0
+    # MA60 向上拐点（从下跌转为上涨）
+    ma60_10d_ago = prepared.ma60[idx - 10]
+    ma60_5d_ago = prepared.ma60[idx - 5]
+    if not np.isnan(ma60_10d_ago) and not np.isnan(ma60_5d_ago):
+        if ma60 > ma60_5d_ago > ma60_10d_ago:   # MA60 加速向上
+            trend += 3.0
+        elif ma60 > ma60_10d_ago:               # MA60 整体向上
+            trend += 1.5
+    # 20日涨幅趋势
     if gain20 >= 5:
         trend += 5.0
     elif gain20 > 0:
         trend += 3.0
+    # 偏离MA20适中（不过度偏离）
     if 0 <= extension_pct <= 8:
         trend += 3.0
-    subscores["trend"] = round(trend, 2)
+    subscores["trend"] = round(min(trend, 40.0), 2)   # 上限40
     score += trend
 
     # 4) 成交活跃度 15
