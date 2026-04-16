@@ -660,7 +660,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         q_start = idx - config.quality_days + 1
         quality_amounts = prepared.amount[q_start: idx + 1]
         if len(quality_amounts) >= 5:
-            # 滚动5日均值，找到最大5日区间
+            # 滚动5日均值，找到质量窗口内最大5日区间
             max_5d_avg = 0.0
             for i in range(len(quality_amounts) - 4):
                 window_5d = quality_amounts[i:i + 5]
@@ -668,9 +668,15 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
                     window_avg = float(np.nanmean(window_5d))
                     if window_avg > max_5d_avg:
                         max_5d_avg = window_avg
-            quality_20d_avg = float(np.nanmean(quality_amounts))
-            # 必须有明显放量：最大5日区间 > 20日均值的1.8倍
-            if max_5d_avg < quality_20d_avg * config.volume_surge_ratio:
+            # 对比基准：窗口开始前10日的5日均（平静期基准）
+            baseline_start = max(0, q_start - 10)
+            baseline_amounts = prepared.amount[baseline_start:q_start]
+            if len(baseline_amounts) < 5:
+                # 不足10日则用整体前段作基准
+                baseline_amounts = quality_amounts[:max(5, len(quality_amounts)//3)]
+            baseline_5d_avg = float(np.nanmean(baseline_amounts[-5:])) if len(baseline_amounts) >= 5 else float(np.nanmean(baseline_amounts))
+            # 必须有明显放量：窗口最大5日均值 > 基准5日均值的 volume_surge_ratio 倍
+            if max_5d_avg < baseline_5d_avg * config.volume_surge_ratio:
                 return None
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
