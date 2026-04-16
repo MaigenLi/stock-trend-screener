@@ -670,9 +670,9 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
                 # 成交额放大
                 amt_ok = (not np.isnan(prev_amt)) and (not np.isnan(curr_amt)) \
                          and (prev_amt > 0) and (curr_amt >= prev_amt * config.volume_surge_ratio)
-                # 换手率：当前5日窗口均值 >= 10%
-                turn_vals = prepared.avg_turnover_5[q_start + i + 5: q_start + i + 10]
-                curr_turn_avg = float(np.nanmean(turn_vals)) if len(turn_vals) > 0 else 0.0
+                # 换手率：当前5日窗口原始换手率均值 >= 10%
+                raw_turn_vals = prepared.turnover[q_start + i + 5: q_start + i + 10]
+                curr_turn_avg = float(np.nanmean(raw_turn_vals)) if len(raw_turn_vals) > 0 else 0.0
                 turn_ok = (not np.isnan(curr_turn_avg)) and (curr_turn_avg >= 10.0)
                 if amt_ok or turn_ok:
                     found_surge = True
