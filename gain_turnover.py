@@ -694,8 +694,8 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         return None
     if gain10 <= 0:
         return None
-    # max_extension 动态化为 signal_days * max_gain（移除硬编码参数）
-    dynamic_max_ext = config.signal_days * config.max_gain * 2.0
+    # max_extension 动态化为 signal_days * max_gain
+    dynamic_max_ext = config.signal_days * config.max_gain
     if extension_pct > dynamic_max_ext:
         return None
     if rsi >= 82:
