@@ -652,7 +652,10 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
         return None
 
-    if not np.all((signal_gains >= config.min_gain) & (signal_gains <= config.max_gain)):
+    # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
+    below_min = (signal_gains < config.min_gain).sum()
+    max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
+    if not (below_min <= max_allowed_below and np.all(signal_gains <= config.max_gain)):
         return None
 
     avg_amt20 = prepared.avg_amount_20[idx]
@@ -691,7 +694,9 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         return None
     if gain10 <= 0:
         return None
-    if extension_pct > config.max_extension_pct:
+    # max_extension 动态化为 signal_days * max_gain（移除硬编码参数）
+    dynamic_max_ext = config.signal_days * config.max_gain * 2.0
+    if extension_pct > dynamic_max_ext:
         return None
     if rsi >= 82:
         return None
