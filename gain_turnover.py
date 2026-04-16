@@ -656,10 +656,10 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         return None
 
     # ── 质量窗口过滤（可选）：近quality_days个交易日内必须有明显放量区间
-    if config.check_volume_surge and config.quality_days >= 20:
+    if config.check_volume_surge and config.quality_days >= 5:
         q_start = idx - config.quality_days + 1
         quality_amounts = prepared.amount[q_start: idx + 1]
-        if len(quality_amounts) >= 20:
+        if len(quality_amounts) >= 5:
             # 滚动5日均值，找到最大5日区间
             max_5d_avg = 0.0
             for i in range(len(quality_amounts) - 4):
