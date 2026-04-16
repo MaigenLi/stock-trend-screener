@@ -149,6 +149,7 @@ if __name__ == "__main__":
     parser.add_argument("--refresh-cache", action="store_true", help="强制刷新前复权缓存")
     parser.add_argument("--check-fundamental", action="store_true", help="开启基本面检查（亏损股扣20分）")
     parser.add_argument("--sector-bonus", action="store_true", help="开启热门板块加分（当日涨跌幅前15名板块内股票+8分）")
+    parser.add_argument("--check-volume-surge", action="store_true", help="开启质量窗口放量检查（默认关闭）")
     parser.add_argument("--output", "-o", type=str, default=None, help="输出文件路径")
     args = parser.parse_args()
 
@@ -170,6 +171,7 @@ if __name__ == "__main__":
         score_threshold=args.score_threshold,
         adjust=args.adjust,
         check_fundamental=args.check_fundamental,
+        check_volume_surge=args.check_volume_surge,
         sector_bonus=args.sector_bonus,
     )
 

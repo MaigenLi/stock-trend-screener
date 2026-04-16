@@ -199,6 +199,7 @@ class StrategyConfig:
     sector_bonus: bool = False         # 是否开启热门板块加分
     sector_top_n: int = 15             # 前N名板块视为热门板块
     sector_bonus_pts: float = 8.0      # 热门板块加分分值
+    check_volume_surge: bool = False  # 是否检查质量窗口内明显放量（默认关闭）
 
 
 @dataclass
@@ -653,9 +654,8 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
         return None
 
-    # ── 质量窗口过滤：近20个交易日内必须有明显放量区间 ──────────────────────
-    # 在质量窗口内，找到成交额最大的5日区间，要求其均值 > 20日均值的1.8倍
-    if config.quality_days >= 20:
+    # ── 质量窗口过滤（可选）：近quality_days个交易日内必须有明显放量区间
+    if config.check_volume_surge and config.quality_days >= 20:
         q_start = idx - config.quality_days + 1
         quality_amounts = prepared.amount[q_start: idx + 1]
         if len(quality_amounts) >= 20:
