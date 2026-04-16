@@ -588,6 +588,7 @@ class SignalResult:
     fundamental_report_date: Optional[str] = None
     sector_name: Optional[str] = None
     sector_bonus_applied: float = 0.0
+    limit_up_bonus: float = 0.0
 
 
 def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
@@ -828,6 +829,15 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     subscores["rsi_health"] = round(rsi_score, 2)
     score += rsi_score
 
+    # ── 近10日涨停加分 ─────────────────────────────────
+    # 涨停阈值：前复权数据中单日涨幅 >= 9.5%（留0.5%容差）
+    recent_gains = prepared.gains[idx - 9: idx + 1]   # 最近10个交易日（含今日）
+    limit_up_bonus = 0.0
+    if len(recent_gains) >= 10 and (~np.isnan(recent_gains)).sum() >= 10:
+        if np.any(recent_gains >= 9.5):
+            limit_up_bonus = 20.0
+            score += limit_up_bonus
+
     # ── 基本面扣分（亏损 / PE为负）──────────────────────
     fundamental_penalty = 0
     if config.check_fundamental and fundamental is not None:
@@ -883,6 +893,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "fundamental_report_date": fundamental.report_date if fundamental is not None else None,
         "sector_name": sector_name,
         "sector_bonus_applied": sector_bonus_applied,
+        "limit_up_bonus": limit_up_bonus,
     }
 
 
@@ -925,6 +936,7 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         fundamental_report_date=result["fundamental_report_date"],
         sector_name=result.get("sector_name"),
         sector_bonus_applied=result.get("sector_bonus_applied", 0.0),
+        limit_up_bonus=result.get("limit_up_bonus", 0.0),
     )
 
 
@@ -955,6 +967,14 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
             penalty_str = f"-{r.fundamental_penalty}"
         else:
             penalty_str = "-"
+        # 附加信息：板块加分 或 涨停加分
+        extras = []
+        if r.sector_bonus_applied > 0:
+            extras.append(f"+{int(r.sector_bonus_applied)}({r.sector_name})")
+        if r.limit_up_bonus > 0:
+            extras.append(f"+{int(r.limit_up_bonus)}涨停")
+        if extras:
+            penalty_str = " ".join(extras)
         row = (
             f"{_rpad(code,10)}\t{_rpad(name,8)}\t{_rpad(signal_date,12)}\t{_lpad(f'{r.score:.1f}',6)}\t"
             f"{_lpad(f'{r.total_gain_window:+.2f}%',9)}\t{_lpad(f'{r.avg_amount_20:.2f}',10)}\t"
@@ -964,7 +984,12 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
         )
         lines.append(row)
     lines.append("-" * 160)
-    bonus_note = " + 热门板块加分(在榜+8)" if any(r.sector_bonus_applied > 0 for r in results) else ""
+    bonus_parts = []
+    if any(r.sector_bonus_applied > 0 for r in results):
+        bonus_parts.append("热门板块+8")
+    if any(r.limit_up_bonus > 0 for r in results):
+        bonus_parts.append("近10日涨停+20")
+    bonus_note = (" + " + " + ".join(bonus_parts)) if bonus_parts else ""
     lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10{bonus_note}")
     # 基本面详情（亏损股摘要）
     loss_stocks = [r for r in results if r.fundamental_penalty > 0]
