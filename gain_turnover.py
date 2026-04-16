@@ -49,6 +49,136 @@ STOCK_NAMES_FILE = Path.home() / "stock_code" / "results" / "all_stock_names_fin
 FUNDAMENTAL_CACHE_DIR = WORKSPACE / ".cache" / "fundamental"
 FUNDAMENTAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# ── 板块缓存 ──────────────────────────────────────────────
+SECTOR_CACHE_DIR = WORKSPACE / ".cache" / "sector"
+SECTOR_MAP_FILE = SECTOR_CACHE_DIR / "stock_sector_map.json"
+SECTOR_TOP_FILE  = SECTOR_CACHE_DIR / "top_sectors.json"
+SECTOR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _fetch_sina_sectors() -> tuple[list[dict], list[dict]]:
+    """从新浪获取所有行业板块及涨跌幅，返回 (top_list, bottom_list)。"""
+    try:
+        import re, urllib.request
+        url = "https://vip.stock.finance.sina.com.cn/q/view/newFLJK.php?param=class"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://finance.sina.com.cn"
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            txt = resp.read().decode("gbk", errors="replace")
+        pattern = re.compile(r'"(gn_\w+)":"([^"]+)"')
+        matches = pattern.findall(txt)
+        boards = []
+        for key, value in matches:
+            parts = value.split(",")
+            if len(parts) < 5:
+                continue
+            try:
+                name = parts[1]
+                pct = float(parts[4]) if parts[4].replace(".", "", 1).replace("-", "", 1).isdigit() else 0
+                boards.append({"name": name, "pct": pct, "code": key})
+            except (ValueError, IndexError):
+                continue
+        boards.sort(key=lambda x: x["pct"], reverse=True)
+        return boards[:15], boards[-5:][::-1]
+    except Exception as e:
+        print(f"⚠️ 新浪板块获取失败: {e}")
+        return [], []
+
+
+def get_top_sectors(n: int = 15, use_cache: bool = True) -> set[str]:
+    """
+    获取今日热门板块（涨跌幅前N名），返回板块名称集合。
+    缓存文件: top_sectors.json（有效期24小时）
+    """
+    if use_cache and SECTOR_TOP_FILE.exists():
+        age_hours = (time.time() - SECTOR_TOP_FILE.stat().st_mtime) / 3600.0
+        if age_hours < 24:
+            try:
+                data = json.loads(SECTOR_TOP_FILE.read_text(encoding="utf-8"))
+                return set(data["top_sectors"])
+            except Exception:
+                pass
+    top, _ = _fetch_sina_sectors()
+    top_names = {b["name"] for b in top[:n]}
+    SECTOR_TOP_FILE.write_text(
+        json.dumps({"top_sectors": list(top_names)}, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    return top_names
+
+
+def get_stock_sector_map() -> dict[str, str]:
+    """
+    加载股票→板块映射表（从缓存文件），不存在则返回空dict。
+    缓存文件: stock_sector_map.json
+    """
+    if not SECTOR_MAP_FILE.exists():
+        return {}
+    try:
+        return json.loads(SECTOR_MAP_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_stock_sector_map(mapping: dict[str, str]):
+    """保存股票→板块映射表到缓存文件。"""
+    try:
+        existing = get_stock_sector_map()
+        existing.update(mapping)
+        SECTOR_MAP_FILE.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print(f"⚠️ 板块映射缓存保存失败: {e}")
+
+
+def fetch_stock_sector_from_sina(code: str) -> str | None:
+    """
+    通过新浪API查询单只股票的所属行业板块，返回板块名称，失败返回None。
+    使用 Sina 行业板块（160+板块，每板块1只代表股票）构建逆向映射。
+    """
+    try:
+        import re, urllib.request
+        url = "https://vip.stock.finance.sina.com.cn/q/view/newFLJK.php?param=class"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://finance.sina.com.cn"
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            txt = resp.read().decode("gbk", errors="replace")
+        pattern = re.compile(r'"(gn_\w+)":"([^"]+)"')
+        matches = pattern.findall(txt)
+        # 逆向: stock_code → sector_name
+        for key, value in matches:
+            parts = value.split(",")
+            if len(parts) < 9:
+                continue
+            stock_code = parts[8].strip()   # 代表股票代码
+            sector_name = parts[1].strip()  # 板块名称
+            if stock_code == code:
+                return sector_name
+        return None
+    except Exception:
+        return None
+
+
+def resolve_stock_sector(code: str, cache: dict[str, str]) -> tuple[str | None, dict[str, str]]:
+    """
+    获取股票所属板块（优先用缓存，否则尝试查询Sina）。
+    返回 (sector_name, updated_cache)
+    """
+    code = normalize_prefixed(code)
+    if code in cache:
+        return cache[code], cache
+    sector = fetch_stock_sector_from_sina(code)
+    if sector:
+        new_cache = dict(cache)
+        new_cache[code] = sector
+        save_stock_sector_map({code: sector})
+        return sector, new_cache
+    return None, cache
+
+
 _CACHE_LOCKS: dict[str, threading.Lock] = {}
 _CACHE_LOCKS_GUARD = threading.Lock()
 
@@ -66,6 +196,9 @@ class StrategyConfig:
     max_extension_pct: float = 16.0
     min_history_days: int = 90
     check_fundamental: bool = False   # 是否检查基本面（亏损/PE为负扣分）
+    sector_bonus: bool = False         # 是否开启热门板块加分
+    sector_top_n: int = 15             # 前N名板块视为热门板块
+    sector_bonus_pts: float = 8.0      # 热门板块加分分值
 
 
 @dataclass
@@ -453,6 +586,8 @@ class SignalResult:
     fundamental_roe: Optional[float] = None
     fundamental_is_profitable: Optional[bool] = None
     fundamental_report_date: Optional[str] = None
+    sector_name: Optional[str] = None
+    sector_bonus_applied: float = 0.0
 
 
 def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
@@ -505,7 +640,9 @@ def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
 
 
 def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
-                  code: Optional[str] = None, fundamental: Optional[FundamentalData] = None) -> Optional[dict]:
+                  code: Optional[str] = None, fundamental: Optional[FundamentalData] = None,
+                  top_sectors: Optional[set[str]] = None,
+                  stock_sector_map: Optional[dict[str, str]] = None) -> Optional[dict]:
     min_idx = max(config.signal_days + 1, config.quality_days, 60, config.min_history_days)
     if idx < min_idx:
         return None
@@ -664,6 +801,16 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
             fundamental_penalty = FUNDAMENTAL_PENALTY_LOSS
         score -= fundamental_penalty
 
+    # ── 热门板块加分 ────────────────────────────────────
+    sector_name = None
+    sector_bonus_applied = 0.0
+    if config.sector_bonus and top_sectors and code and stock_sector_map:
+        c = normalize_prefixed(code)
+        sector_name = stock_sector_map.get(c)
+        if sector_name and sector_name in top_sectors:
+            sector_bonus_applied = config.sector_bonus_pts
+            score += sector_bonus_applied
+
     if score < config.score_threshold:
         return None
 
@@ -700,11 +847,15 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "fundamental_roe": round(fundamental.roe, 2) if fundamental is not None else None,
         "fundamental_is_profitable": fundamental.is_profitable if fundamental is not None else None,
         "fundamental_report_date": fundamental.report_date if fundamental is not None else None,
+        "sector_name": sector_name,
+        "sector_bonus_applied": sector_bonus_applied,
     }
 
 
 def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: StrategyConfig,
-                         fundamental: Optional[FundamentalData] = None) -> Optional[SignalResult]:
+                         fundamental: Optional[FundamentalData] = None,
+                         top_sectors: Optional[set[str]] = None,
+                         stock_sector_map: Optional[dict[str, str]] = None) -> Optional[SignalResult]:
     prepared = prepare_data(df)
     if prepared is None:
         return None
@@ -712,7 +863,8 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
     if config.check_fundamental and fundamental is None:
         fundamental = load_fundamental_data(code)
     idx = len(prepared.df) - 1
-    result = evaluate_signal(prepared, idx, config, code=code, fundamental=fundamental)
+    result = evaluate_signal(prepared, idx, config, code=code, fundamental=fundamental,
+                             top_sectors=top_sectors, stock_sector_map=stock_sector_map)
     if result is None:
         return None
     return SignalResult(
@@ -737,6 +889,8 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         fundamental_roe=result["fundamental_roe"],
         fundamental_is_profitable=result["fundamental_is_profitable"],
         fundamental_report_date=result["fundamental_report_date"],
+        sector_name=result.get("sector_name"),
+        sector_bonus_applied=result.get("sector_bonus_applied", 0.0),
     )
 
 
@@ -760,17 +914,24 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
         eps_str = f"{r.fundamental_eps:.3f}" if r.fundamental_eps is not None else "-"
         roe_str = f"{r.fundamental_roe:.2f}" if r.fundamental_roe is not None else "-"
         profit_str = "✓" if r.fundamental_is_profitable else ("✗" if r.fundamental_is_profitable is False else "-")
-        penalty_str = f"-{r.fundamental_penalty}" if r.fundamental_penalty else "-"
+        # 扣分列：基本面扣分 或 板块加分
+        if r.sector_bonus_applied > 0:
+            penalty_str = f"+{int(r.sector_bonus_applied)}({r.sector_name})"
+        elif r.fundamental_penalty:
+            penalty_str = f"-{r.fundamental_penalty}"
+        else:
+            penalty_str = "-"
         row = (
             f"{_rpad(code,10)}\t{_rpad(name,8)}\t{_rpad(signal_date,12)}\t{_lpad(f'{r.score:.1f}',6)}\t"
             f"{_lpad(f'{r.total_gain_window:+.2f}%',9)}\t{_lpad(f'{r.avg_amount_20:.2f}',10)}\t"
             f"{_lpad(f'{r.avg_turnover_5:.2f}%',8)}\t{_lpad(f'{r.rsi14:.1f}',6)}\t"
             f"{_lpad(f'{r.extension_pct:+.2f}%',9)}\t{_lpad(f'{r.close:.2f}',7)}\t"
-            f"{_lpad(eps_str,7)}\t{_lpad(roe_str,7)}\t{_lpad(profit_str,5)}\t{_lpad(penalty_str,5)}"
+            f"{_lpad(eps_str,7)}\t{_lpad(roe_str,7)}\t{_lpad(profit_str,5)}\t{_lpad(penalty_str,8)}"
         )
         lines.append(row)
     lines.append("-" * 160)
-    lines.append("评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10 - 基本面扣分")
+    bonus_note = " + 热门板块加分(在榜+8)" if any(r.sector_bonus_applied > 0 for r in results) else ""
+    lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10{bonus_note}")
     # 基本面详情（亏损股摘要）
     loss_stocks = [r for r in results if r.fundamental_penalty > 0]
     if loss_stocks:

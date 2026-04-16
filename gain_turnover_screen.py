@@ -41,6 +41,9 @@ from stock_trend.gain_turnover import (
     format_signal_results,
     get_all_stock_codes,
     get_stock_name,
+    get_top_sectors,
+    get_stock_sector_map,
+    resolve_stock_sector,
     load_qfq_history,
     load_stock_names,
     normalize_prefixed,
@@ -59,10 +62,23 @@ def screen_market(
     max_workers: int = DEFAULT_WORKERS,
     refresh_cache: bool = False,
 ) -> list:
+    from gain_turnover import (
+        get_top_sectors, get_stock_sector_map, resolve_stock_sector
+    )
+
     names = load_stock_names()
     total = len(codes)
     results = []
     t0 = time.time()
+
+    # ── 热门板块加分 ──────────────────────────────────
+    top_sectors: set[str] = set()
+    stock_sector_map: dict[str, str] = {}
+    if config.sector_bonus:
+        top_sectors = get_top_sectors(n=config.sector_top_n)
+        stock_sector_map = get_stock_sector_map()
+        hot = list(top_sectors)[:5]
+        print(f"   📊 热门板块加分开启: 前{config.sector_top_n}名 {hot} ...")
 
     end_date = target_date.strftime("%Y-%m-%d") if target_date else None
     print(f"\n🔍 升级版筛选: {total} 只股票 | 复权={config.adjust} | workers={max_workers}")
@@ -84,7 +100,12 @@ def screen_market(
             df = df[df["date"] <= pd.Timestamp(target_date.date())].reset_index(drop=True)
         if df.empty:
             return None
-        return evaluate_latest_signal(code, get_stock_name(code, names), df, config)
+        # 板块加分：传入热门板块集合和已有映射，evaluate_signal 内部按需解析
+        return evaluate_latest_signal(
+            code, get_stock_name(code, names), df, config,
+            top_sectors=top_sectors if config.sector_bonus else None,
+            stock_sector_map=stock_sector_map if config.sector_bonus else None,
+        )
 
     done = 0
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -127,6 +148,7 @@ if __name__ == "__main__":
     parser.add_argument("--date", type=str, default=None, help="截止日期 YYYY-MM-DD")
     parser.add_argument("--refresh-cache", action="store_true", help="强制刷新前复权缓存")
     parser.add_argument("--check-fundamental", action="store_true", help="开启基本面检查（亏损股扣20分）")
+    parser.add_argument("--sector-bonus", action="store_true", help="开启热门板块加分（当日涨跌幅前15名板块内股票+8分）")
     parser.add_argument("--output", "-o", type=str, default=None, help="输出文件路径")
     args = parser.parse_args()
 
@@ -149,6 +171,7 @@ if __name__ == "__main__":
         adjust=args.adjust,
         max_extension_pct=args.max_extension,
         check_fundamental=args.check_fundamental,
+        sector_bonus=args.sector_bonus,
     )
 
     codes = [normalize_prefixed(c) for c in args.codes] if args.codes else get_all_stock_codes()
