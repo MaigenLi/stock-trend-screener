@@ -653,9 +653,11 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         return None
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
+    # 但最后一个交易日必须满足 min_gain
     below_min = (signal_gains < config.min_gain).sum()
     max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
-    if not (below_min <= max_allowed_below and np.all(signal_gains <= config.max_gain)):
+    last_day_ok = (signal_gains[-1] >= config.min_gain) if len(signal_gains) > 0 else True
+    if not (last_day_ok and below_min <= max_allowed_below and np.all(signal_gains <= config.max_gain)):
         return None
 
     avg_amt20 = prepared.avg_amount_20[idx]
