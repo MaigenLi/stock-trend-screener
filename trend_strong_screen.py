@@ -256,11 +256,12 @@ def score_trend_strong(df: pd.DataFrame) -> Tuple[float, Dict]:
 
 def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, Dict]:
     """
-    动量评分（满分100）— v2 新增相对强弱调整
+    动量评分（满分100）— 新增近强于中加分
     维度：
-      - 20日累计涨幅（满分 35）
-      - 10日累计涨幅（满分 25）
+      - 20日累计涨幅（满分 35，≥30%满分）
+      - 10日累计涨幅（满分 25，≥15%满分）
       - 创20日新高（满分 40）
+      - 近强于中加分（+10，10日涨幅>20日涨幅×0.6时触发）
       - 相对强弱调整（市场基准对比）
     """
     if df is None or len(df) < 25:
@@ -268,20 +269,20 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
 
     close = df["close"]
 
-    # 20日涨幅
+    # 20日涨幅（满分35，≥30%满分，线性递增）
     if len(close) >= 21:
         gain_20d = float(close.iloc[-1]) / float(close.iloc[-21]) - 1
         gain_20d = max(gain_20d, 0)
-        gain_20d_score = min(gain_20d * 100, 35)
+        gain_20d_score = min(gain_20d * 100 / 30.0 * 35.0, 35.0)  # ≥30%得35分
         gain_20d_pct = gain_20d * 100
     else:
         gain_20d = 0.0; gain_20d_score = 0.0; gain_20d_pct = 0.0
 
-    # 10日涨幅
+    # 10日涨幅（满分25，≥15%满分，线性递增）
     if len(close) >= 11:
         gain_10d = float(close.iloc[-1]) / float(close.iloc[-11]) - 1
         gain_10d = max(gain_10d, 0)
-        gain_10d_score = min(gain_10d * 100, 25)
+        gain_10d_score = min(gain_10d * 100 / 15.0 * 25.0, 25.0)  # ≥15%得25分
         gain_10d_pct = gain_10d * 100
     else:
         gain_10d = 0.0; gain_10d_score = 0.0; gain_10d_pct = 0.0
@@ -299,15 +300,20 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
     else:
         new_high_score = 0.0
 
+    # 近强于中加分：10日涨幅 > 20日涨幅×0.6 时 +10分
+    recent_strong_bonus = 0.0
+    if gain_20d_pct > 0 and gain_10d_pct > gain_20d_pct * 0.6:
+        recent_strong_bonus = 10.0
+
     # 相对强弱调整
     rel_strength = gain_20d_pct - market_gain
 
+    momentum_raw = gain_20d_score + gain_10d_score + new_high_score + recent_strong_bonus
     if rel_strength < REL_STRENGTH_FILTER:
-        momentum_raw = gain_20d_score + gain_10d_score + new_high_score
         momentum_adjusted = momentum_raw * REL_STRENGTH_DISCOUNT
         rel_strength_applied = True
     else:
-        momentum_adjusted = gain_20d_score + gain_10d_score + new_high_score
+        momentum_adjusted = momentum_raw
         rel_strength_applied = False
 
     total = momentum_adjusted
@@ -318,6 +324,7 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
         "new_high_score": round(new_high_score, 2),
         "gain_20d_score": round(gain_20d_score, 2),
         "gain_10d_score": round(gain_10d_score, 2),
+        "recent_strong_bonus": round(recent_strong_bonus, 2),
         "market_gain_pct": round(market_gain, 3),
         "rel_strength_pct": round(rel_strength, 3),
         "rel_strength_applied": rel_strength_applied,
@@ -537,12 +544,12 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         print("\n⚠️  未筛选到符合条件的股票")
         return
 
-    print(f"\n{'='*110}")
+    print(f"\n{'='*120}")
     print(f"📈 {title}（共 {len(results)} 只）")
-    print(f"{'='*110}")
+    print(f"{'='*120}")
     print(f"{'代码':<10} {'名称':<10} {'总分':>6} {'趋势':>6} {'动量':>6} {'量价':>6} "
-          f"{'RSI':>5} {'20日涨幅':>8} {'相对强弱':>8} {'量比':>6} {'数据日':>12}")
-    print(f"{'-'*110}")
+          f"{'RSI':>5} {'20日涨幅':>8} {'10日涨幅':>8} {'近强':>5} {'相对强弱':>8} {'量比':>6} {'数据日':>12}")
+    print(f"{'-'*120}")
 
     for item in results:
         code, name, score, factors = item[0], item[1], item[2], item[3]
@@ -555,27 +562,31 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         f_vol = factors.get("volume", {})
 
         gain_20d = f_mom.get("gain_20d_pct", 0)
+        gain_10d = f_mom.get("gain_10d_pct", 0)
+        recent_strong_bonus = f_mom.get("recent_strong_bonus", 0)
         rel_strength = f_mom.get("rel_strength_pct", 0)
         vol_ratio = f_vol.get("vol_ratio", 0)
 
         trend_s = f_trend.get("above_score", 0) + f_trend.get("bull_score", 0) + f_trend.get("div_score", 0) + f_trend.get("slope_score", 0)
-        momentum_s = f_mom.get("gain_20d_score", 0) + f_mom.get("gain_10d_score", 0) + f_mom.get("new_high_score", 0)
+        momentum_s = f_mom.get("gain_20d_score", 0) + f_mom.get("gain_10d_score", 0) + f_mom.get("new_high_score", 0) + recent_strong_bonus
         vol_s = f_vol.get("vr_score", 0) + f_vol.get("ar_score", 0) + f_vol.get("match_score", 0)
 
         penalty_str = f"-{rsi_penalty}" if rsi_penalty > 0 else ""
+        recent_strong_str = f"+{int(recent_strong_bonus)}" if recent_strong_bonus > 0 else "-"
         print(f"{code:<10} {name:<10} {score:>6.1f} "
               f"{trend_s:>6.1f} "
               f"{momentum_s:>6.1f} "
               f"{vol_s:>6.1f} "
               f"{rsi:>5.1f}{penalty_str:<4} "
-              f"{gain_20d:>7.2f}% {rel_strength:>+7.2f}% {vol_ratio:>6.2f} {data_date:>12}")
+              f"{gain_20d:>7.2f}% {gain_10d:>7.2f}% {recent_strong_str:>4} "
+              f"{rel_strength:>+7.2f}% {vol_ratio:>6.2f} {data_date:>12}")
 
-    print(f"{'-'*110}")
+    print(f"{'-'*120}")
     print(f"评分说明：总分 = 趋势×50% + 动量×30% + 量价×20% - RSI惩罚")
     print(f"          趋势 = 价格在均线上方(40) + 均线多头排列(32) + 均线发散度(20) + 斜率(8)")
-    print(f"          动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40)，再按相对强弱调整")
+    print(f"          动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40) + 近强于中(10)，按相对强弱调整")
     print(f"          量价 = 量比(35) + 成交额放大(35) + 量价配合(30)")
-    print(f"v2改进：RSI>88过滤，RSI>82扣40分，RSI>75扣20分；相对强弱<-10%过滤，<-5%动量5折")
+    print(f"说明：近强=近强于中加分（+10），10日涨幅>20日涨幅×0.6时触发")
 
 
 # ============================================================
