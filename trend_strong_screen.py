@@ -544,12 +544,15 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         print("\n⚠️  未筛选到符合条件的股票")
         return
 
-    print(f"\n{'='*120}")
+    def _f(ls: list[str]) -> str:
+        """用 tab 分隔，避免全角中文宽度错位"""
+        return "\t".join(ls)
+
+    print(f"\n{'='*110}")
     print(f"📈 {title}（共 {len(results)} 只）")
-    print(f"{'='*120}")
-    print(f"{'代码':<10} {'名称':<10} {'总分':>6} {'趋势':>6} {'动量':>6} {'量价':>6} "
-          f"{'RSI':>5} {'20日涨幅':>8} {'10日涨幅':>8} {'近强':>5} {'相对强弱':>8} {'量比':>6} {'数据日':>12}")
-    print(f"{'-'*120}")
+    print(f"{'='*110}")
+    print(_f(["代码", "名称", "总分", "趋势", "动量", "量价", "RSI", "20日涨幅", "10日涨幅", "近强", "相对强弱", "量比", "数据日"]))
+    print("-"*110)
 
     for item in results:
         code, name, score, factors = item[0], item[1], item[2], item[3]
@@ -573,20 +576,28 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
 
         penalty_str = f"-{rsi_penalty}" if rsi_penalty > 0 else ""
         recent_strong_str = f"+{int(recent_strong_bonus)}" if recent_strong_bonus > 0 else "-"
-        print(f"{code:<10} {name:<10} {score:>6.1f} "
-              f"{trend_s:>6.1f} "
-              f"{momentum_s:>6.1f} "
-              f"{vol_s:>6.1f} "
-              f"{rsi:>5.1f}{penalty_str:<4} "
-              f"{gain_20d:>7.2f}% {gain_10d:>7.2f}% {recent_strong_str:>4} "
-              f"{rel_strength:>+7.2f}% {vol_ratio:>6.2f} {data_date:>12}")
+        print(_f([
+            code,
+            name,
+            f"{score:.1f}",
+            f"{trend_s:.1f}",
+            f"{momentum_s:.1f}",
+            f"{vol_s:.1f}",
+            f"{rsi:.1f}{penalty_str}",
+            f"{gain_20d:+.2f}%",
+            f"{gain_10d:+.2f}%",
+            recent_strong_str,
+            f"{rel_strength:+.2f}%",
+            f"{vol_ratio:.2f}",
+            str(data_date),
+        ]))
 
-    print(f"{'-'*120}")
-    print(f"评分说明：总分 = 趋势×50% + 动量×30% + 量价×20% - RSI惩罚")
-    print(f"          趋势 = 价格在均线上方(40) + 均线多头排列(32) + 均线发散度(20) + 斜率(8)")
-    print(f"          动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40) + 近强于中(10)，按相对强弱调整")
-    print(f"          量价 = 量比(35) + 成交额放大(35) + 量价配合(30)")
-    print(f"说明：近强=近强于中加分（+10），10日涨幅>20日涨幅×0.6时触发")
+    print("-"*110)
+    print("评分说明：总分 = 趋势×50% + 动量×30% + 量价×20% - RSI惩罚")
+    print("趋势 = 价格在均线上方(40) + 均线多头排列(32) + 均线发散度(20) + 斜率(8)")
+    print("动量 = 20日涨幅(35) + 10日涨幅(25) + 创新高(40) + 近强于中(10)，按相对强弱调整")
+    print("量价 = 量比(35) + 成交额放大(35) + 量价配合(30)")
+    print("说明：近强=近强于中加分（+10），10日涨幅>20日涨幅×0.6时触发")
 
 
 # ============================================================
