@@ -835,7 +835,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     limit_up_bonus = 0.0
     if len(recent_gains) >= 10 and (~np.isnan(recent_gains)).sum() >= 10:
         if np.any(recent_gains >= 9.5):
-            limit_up_bonus = 20.0
+            limit_up_bonus = 10.0
             score += limit_up_bonus
 
     # ── 基本面扣分（亏损 / PE为负）──────────────────────
@@ -988,7 +988,7 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
     if any(r.sector_bonus_applied > 0 for r in results):
         bonus_parts.append("热门板块+8")
     if any(r.limit_up_bonus > 0 for r in results):
-        bonus_parts.append("近10日涨停+20")
+        bonus_parts.append("近10日涨停+10")
     bonus_note = (" + " + " + ".join(bonus_parts)) if bonus_parts else ""
     lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10{bonus_note}")
     # 基本面详情（亏损股摘要）
