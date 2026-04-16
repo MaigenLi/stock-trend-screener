@@ -1,10 +1,10 @@
 # stock_trend 脚本参考手册
 
 > 生成时间：2026-04-16  
-> 文档版本：v1.1  
+> 文档版本：v1.2  
 > 共收录 11 个脚本/模块
 >
-> **v1.1 更新**：gain_turnover_screen 新增 --sector-bonus；信号窗口容忍1/3天；max_extension 动态化为 days×max_gain；signal_validator 评分细分6档
+> **v1.2 更新**：近10日涨停+10；亏损-10；信号窗口最后一天>-3%容忍；trend上限40分；热门板块+8
 
 ---
 
@@ -64,7 +64,9 @@
 | 量能配合 | 15 | 5 日/20 日均成交额比值 + 上涨日放量 |
 | K 线质量 | 5 | 实体占比高、上影线短 |
 | RSI/不过热 | 10 | 45~72 满分，>78 开始扣分，≥82 直接过滤 |
-| 基本面扣分 | -20 | EPS<0（亏损）扣 20 分 |
+| 基本面扣分 | -10 | EPS<0（亏损）扣 10 分 |
+| 近10日涨停 | +10 | 近10个交易日内有涨停（≥9.5%）加 10 分 |
+| 热门板块加分 | +8 | 属于当日涨幅前15名板块加 8 分（需 `--sector-bonus`） |
 
 ### 数据缓存路径
 
@@ -124,7 +126,7 @@ python gain_turnover_screen.py --output /path/to/output.txt
 | `--codes` | list | None | 指定股票代码（覆盖全市场） |
 | `--date` | str | None | 截止日期 `YYYY-MM-DD`（复盘用） |
 | `--refresh-cache` | flag | False | 强制刷新前复权缓存 |
-| `--check-fundamental` | flag | False | 开启基本面检查（亏损股扣20分） |
+| `--check-fundamental` | flag | False | 开启基本面检查（亏损股扣10分） |
 | `--sector-bonus` | flag | False | 开启热门板块加分（当日涨幅前15名板块内股票+8分） |
 | `--output` / `-o` | str | None | 输出文件路径 |
 
