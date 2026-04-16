@@ -433,6 +433,12 @@ def evaluate_stock(code: str,
         if rsi_val > RSI_FILTER:
             return None
 
+        # 10日涨幅 > 40% 直接过滤（涨幅过高风险大）
+        if len(close) >= 11:
+            gain_10d = float(close.iloc[-1]) / float(close.iloc[-11]) - 1
+            if gain_10d > 0.40:
+                return None
+
         # 三维度评分
         trend_score, trend_factors = score_trend_strong(df)
         momentum_score, momentum_factors = score_momentum(df, market_gain=market_gain)
