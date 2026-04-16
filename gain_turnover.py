@@ -215,7 +215,7 @@ class FundamentalData:
 
 
 # ── 基本面扣分常量 ───────────────────────────────────
-FUNDAMENTAL_PENALTY_LOSS = 20     # 亏损（EPS<0）扣20分
+FUNDAMENTAL_PENALTY_LOSS = 10     # 亏损（EPS<0）扣10分
 FUNDAMENTAL_PENALTY_NEGATIVE_PE = 10  # PE为负（亏损股）扣10分
 
 
