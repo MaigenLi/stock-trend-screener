@@ -1,8 +1,10 @@
 # stock_trend 脚本参考手册
 
-> 生成时间：2026-04-15  
-> 文档版本：v1.0  
+> 生成时间：2026-04-16  
+> 文档版本：v1.1  
 > 共收录 11 个脚本/模块
+>
+> **v1.1 更新**：gain_turnover_screen 新增 --sector-bonus；信号窗口容忍1/3天；max_extension 动态化为 days×max_gain；signal_validator 评分细分6档
 
 ---
 
@@ -109,22 +111,25 @@ python gain_turnover_screen.py --output /path/to/output.txt
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--days` | int | 2 | 信号窗口天数（连续 N 天涨幅在区间内） |
+| `--days` | int | 2 | 信号窗口天数；≥3天时允许 1/3 天不满足 min_gain |
 | `--min-gain` | float | 2.0 | 每日涨幅最小值（%） |
 | `--max-gain` | float | 7.0 | 每日涨幅最大值（%） |
 | `--quality-days` | int | 10 | 质量窗口天数 |
 | `--turnover` | float | 1.5 | 5 日平均换手率下限（%） |
 | `--min-volume` | float | 1e8 | 20 日平均成交额下限（元） |
 | `--score-threshold` | float | 60.0 | 评分门槛 |
-| `--max-extension` | float | 16.0 | 距 MA20 最大偏离（%） |
 | `--adjust` | str | `qfq` | 复权方式：`qfq` / `hfq` / 空 |
 | `--top-n` | int | 100 | 返回前 N 只 |
 | `--workers` | int | 8 | 并行线程数 |
 | `--codes` | list | None | 指定股票代码（覆盖全市场） |
 | `--date` | str | None | 截止日期 `YYYY-MM-DD`（复盘用） |
 | `--refresh-cache` | flag | False | 强制刷新前复权缓存 |
-| `--check-fundamental` | flag | False | 开启基本面检查 |
+| `--check-fundamental` | flag | False | 开启基本面检查（亏损股扣20分） |
+| `--sector-bonus` | flag | False | 开启热门板块加分（当日涨幅前15名板块内股票+8分） |
 | `--output` / `-o` | str | None | 输出文件路径 |
+
+> **注意**：`--max-extension` 已移除，距 MA20 最大偏离改为动态计算：`max_extension = days × max_gain`
+> 例如 `days=3, max_gain=8.0` → max_extension = 24%
 
 ### 输出示例
 
@@ -337,10 +342,31 @@ python signal_validator.py --output validation_result.txt
 
 | 评分 | 评价 | 条件 |
 |------|------|------|
-| ≥ 85 | 🟢 优秀 | ret_actual ≥ 2% + 未触发止损 |
-| 70 ~ 84 | 🔵 良好 | ret_actual ≥ 0% |
-| 55 ~ 69 | 🟡 及格 | 无重大问题 |
-| < 55 | 🔴 失效 | 触发止损 或 ret_actual < -2% |
+| ≥ 85 | 🟢 优秀 | 真实收益 ≥ 6% 或 高分+止盈 |
+| 70 ~ 84 | 🔵 良好 | 真实收益 ≥ 3% ~ 6% |
+| 55 ~ 69 | 🟡 及格 | 真实收益 ≥ 0% ~ 3% |
+| < 55 | 🔴 失效 | 触发止损 或 真实收益 < 0% |
+
+#### 真实收益评分（基础分 50）
+
+| 真实收益 | 加分 |
+|---------|------|
+| ≥ +6.0% | **+35** |
+| ≥ +5.0% | **+30** |
+| ≥ +4.0% | **+25** |
+| ≥ +3.0% | **+20** |
+| ≥ +2.0% | **+15** |
+| ≥ 0% | **+8** |
+| < 0% | **-20** |
+
+#### 止盈 / 止损 / 跳空
+
+| 项目 | 条件 | 加分/扣分 |
+|------|------|---------|
+| 止盈 | 日内高点 ≥ 信号收盘 × 1.05 | **+10** |
+| 止损 | 收盘价 ≤ 信号收盘 × 0.98 | **-15** |
+| 跳空高开 | ≥ +9% | **-10** |
+| 跳空高开 | ≥ +5% | **-5** |
 
 ### 输出文件
 
