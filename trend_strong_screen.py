@@ -551,9 +551,9 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         return s + " " * (width - dwidth)
 
     def _f(ls: list[str], widths: list[int]) -> str:
-        """用显示宽度对齐分隔"""
+        """用 | 分隔，避免 webchat 空格压缩导致对齐错位"""
         parts = [_pad(str(ls[i]), widths[i]) for i in range(len(ls))]
-        return "  ".join(parts)
+        return " | ".join(parts)
 
     col_widths = [10, 8, 6, 6, 6, 6, 9, 9, 9, 5, 9, 6, 12]
 
@@ -561,7 +561,7 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
     print(f"📈 {title}（共 {len(results)} 只）")
     print(f"{'='*110}")
     print(_f(["代码", "名称", "总分", "趋势", "动量", "量价", "RSI", "20日涨幅", "10日涨幅", "近强", "相对强弱", "量比", "数据日"], col_widths))
-    print("-"*110)
+    print("-" * 110)
 
     for item in results:
         code, name, score, factors = item[0], item[1], item[2], item[3]
