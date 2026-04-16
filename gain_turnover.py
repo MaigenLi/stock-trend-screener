@@ -188,7 +188,7 @@ class StrategyConfig:
     signal_days: int = 2
     min_gain: float = 2.0
     max_gain: float = 7.0
-    quality_days: int = 10
+    quality_days: int = 20
     min_turnover: float = 1.5
     min_amount: float = 1e8
     score_threshold: float = 60.0
@@ -652,6 +652,25 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     quality_gains = prepared.gains[idx - config.quality_days + 1: idx + 1]
     if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
         return None
+
+    # ── 质量窗口过滤：近20个交易日内必须有明显放量区间 ──────────────────────
+    # 在质量窗口内，找到成交额最大的5日区间，要求其均值 > 20日均值的1.8倍
+    if config.quality_days >= 20:
+        q_start = idx - config.quality_days + 1
+        quality_amounts = prepared.amount[q_start: idx + 1]
+        if len(quality_amounts) >= 20:
+            # 滚动5日均值，找到最大5日区间
+            max_5d_avg = 0.0
+            for i in range(len(quality_amounts) - 4):
+                window_5d = quality_amounts[i:i + 5]
+                if not np.isnan(window_5d).any():
+                    window_avg = float(np.nanmean(window_5d))
+                    if window_avg > max_5d_avg:
+                        max_5d_avg = window_avg
+            quality_20d_avg = float(np.nanmean(quality_amounts))
+            # 必须有明显放量：最大5日区间 > 20日均值的1.8倍
+            if max_5d_avg < quality_20d_avg * 1.8:
+                return None
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
     # 但最后一个交易日必须满足 > -3%（允许小幅回调但不超过 -3%）
