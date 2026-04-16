@@ -544,14 +544,23 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
         print("\n⚠️  未筛选到符合条件的股票")
         return
 
-    def _f(ls: list[str]) -> str:
-        """用 tab 分隔，避免全角中文宽度错位"""
-        return "\t".join(ls)
+    def _pad(s: str, width: int) -> str:
+        """按显示宽度填充：中文2字符，ASCII 1字符"""
+        import wcwidth
+        dwidth = sum(wcwidth.wcwidth(c) for c in s)
+        return s + " " * (width - dwidth)
+
+    def _f(ls: list[str], widths: list[int]) -> str:
+        """用显示宽度对齐分隔"""
+        parts = [_pad(str(ls[i]), widths[i]) for i in range(len(ls))]
+        return "  ".join(parts)
+
+    col_widths = [10, 8, 6, 6, 6, 6, 9, 9, 9, 5, 9, 6, 12]
 
     print(f"\n{'='*110}")
     print(f"📈 {title}（共 {len(results)} 只）")
     print(f"{'='*110}")
-    print(_f(["代码", "名称", "总分", "趋势", "动量", "量价", "RSI", "20日涨幅", "10日涨幅", "近强", "相对强弱", "量比", "数据日"]))
+    print(_f(["代码", "名称", "总分", "趋势", "动量", "量价", "RSI", "20日涨幅", "10日涨幅", "近强", "相对强弱", "量比", "数据日"], col_widths))
     print("-"*110)
 
     for item in results:
@@ -590,7 +599,7 @@ def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):
             f"{rel_strength:+.2f}%",
             f"{vol_ratio:.2f}",
             str(data_date),
-        ]))
+        ], col_widths))
 
     print("-"*110)
     print("评分说明：总分 = 趋势×50% + 动量×30% + 量价×20% - RSI惩罚")
