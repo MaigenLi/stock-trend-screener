@@ -161,6 +161,7 @@ def get_market_gain(index_codes: List[str], days: int = 21,
 # ── 默认参数 ──────────────────────────────────────────────
 DEFAULT_TOP_N = 30
 DEFAULT_SCORE_THRESHOLD = 50
+DEFAULT_WORKERS = 8   # 默认8线程，避免AkShare并发过高导致超时
 DEFAULT_MIN_VOLUME = 5e7       # 5000万
 DEFAULT_MIN_DAYS = 60           # 上市>60交易日
 
@@ -469,7 +470,7 @@ def scan_market(codes: List[str],
                top_n: int = DEFAULT_TOP_N,
                min_volume: float = DEFAULT_MIN_VOLUME,
                score_threshold: float = DEFAULT_SCORE_THRESHOLD,
-               max_workers: int = 30,
+               max_workers: int = DEFAULT_WORKERS,
                target_date: Optional[datetime] = None) -> List[Tuple]:
     """
     扫描全市场，返回趋势强势股列表。
@@ -592,7 +593,7 @@ if __name__ == "__main__":
     parser.add_argument("--min-volume", type=float, default=DEFAULT_MIN_VOLUME,
                         help=f"最低成交额阈值（默认{DEFAULT_MIN_VOLUME/1e8:.1f}亿）")
     parser.add_argument("--codes", nargs="+", default=None, help="指定股票代码")
-    parser.add_argument("--workers", type=int, default=30, help="并行线程数（默认30）")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help=f"并行线程数（默认{DEFAULT_WORKERS}）")
     parser.add_argument("--date", type=str, default=None,
                         help="指定截止日期（YYYY-MM-DD），默认当前/最近交易日")
     args = parser.parse_args()
