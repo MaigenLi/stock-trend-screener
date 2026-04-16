@@ -660,19 +660,19 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         q_start = idx - config.quality_days + 1
         quality_amounts = prepared.amount[q_start: idx + 1]
         if len(quality_amounts) >= 5:
-            # 将质量窗口划分为5日窗口（可能有一个不完整的尾端），比较相邻窗口
-            n_full = len(quality_amounts) // 5
-            if n_full < 2:
-                # 窗口太短，无法做5日窗口比较，跳过
-                pass
-            else:
-                # 取最后2个完整5日窗口：倒数第2个（平静期）和倒数第1个（当前期）
-                prev_start = (n_full - 2) * 5
-                curr_start = (n_full - 1) * 5
-                prev_avg = float(np.nanmean(quality_amounts[prev_start:prev_start + 5]))
-                curr_avg = float(np.nanmean(quality_amounts[curr_start:curr_start + 5]))
-                if curr_avg < prev_avg * config.volume_surge_ratio:
-                    return None
+            # 滑动窗口：1-5 vs 6-10，2-6 vs 7-11，3-7 vs 8-12，...
+            # 只要有任意一组满足放大倍数，即为放量
+            n = len(quality_amounts)
+            found_surge = False
+            for i in range(n - 9):   # 需要i+9 < n，即i <= n-10
+                prev_avg = float(np.nanmean(quality_amounts[i:i+5]))
+                curr_avg = float(np.nanmean(quality_amounts[i+5:i+10]))
+                if not (np.isnan(prev_avg) or np.isnan(curr_avg) or prev_avg <= 0):
+                    if curr_avg >= prev_avg * config.volume_surge_ratio:
+                        found_surge = True
+                        break
+            if not found_surge:
+                return None
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
     # 但最后一个交易日必须满足 > -3%（允许小幅回调但不超过 -3%）
