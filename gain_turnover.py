@@ -187,7 +187,7 @@ _CACHE_LOCKS_GUARD = threading.Lock()
 class StrategyConfig:
     signal_days: int = 2
     min_gain: float = 2.0
-    max_gain: float = 8.0
+    max_gain: float = 10.0
     quality_days: int = 20
     min_turnover: float = 1.5
     min_amount: float = 1e8
@@ -591,6 +591,11 @@ class SignalResult:
     sector_name: Optional[str] = None
     sector_bonus_applied: float = 0.0
     limit_up_bonus: float = 0.0
+    rsi_tier: str = ""   # 🟢低位/🟡健康/🔴高位/高位热/❌超买
+    rsi_momentum: float = 0.0   # RSI今日 - RSI昨日（RSI动量）
+    rsi_momentum_score: float = 0.0  # RSI动量得分
+    volume_accel: float = 0.0   # 今日量 / 昨日量（量能加速度）
+    volume_accel_score: float = 0.0  # 量能加速度得分
 
 
 def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
@@ -713,6 +718,8 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     gain20 = (prepared.close[idx] / prepared.close[idx - 20] - 1.0) * 100.0
     extension_pct = (close / ma20 - 1.0) * 100.0 if ma20 > 0 else 999.0
     rsi = prepared.rsi14[idx] if not np.isnan(prepared.rsi14[idx]) else 50.0
+    rsi_prev = prepared.rsi14[idx-1] if idx >= 1 and not np.isnan(prepared.rsi14[idx-1]) else rsi
+    rsi_momentum = float(rsi - rsi_prev)
     amount_ratio_5_20 = prepared.avg_amount_5[idx] / avg_amt20 if avg_amt20 > 0 and not np.isnan(prepared.avg_amount_5[idx]) else 1.0
     gain10 = (prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0
 
@@ -856,6 +863,68 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     subscores["rsi_health"] = round(rsi_score, 2)
     score += rsi_score
 
+    # ── RSI 分层扣分（tiered penalty）────────────────────────────────
+    # RSI 45~65: 健康，上涨持续性好 → 不扣分
+    # RSI 65~72: 偏强 → 扣5分
+    # RSI 72~75: 高位区 → 扣10分
+    # RSI 75~78: 过热预警 → 扣15分
+    # RSI 78~82: 过热 → 扣25分（但不强排除，因为趋势延续性强）
+    # RSI > 82: 超买 → calc 已有过滤，这里不会到
+    rsi_tier = ""
+    if rsi < 50:
+        rsi_tier = "🔵低位"
+    elif 50 <= rsi <= 65:
+        rsi_tier = "🟢健康"
+    elif 65 < rsi <= 72:
+        rsi_tier = "🟡偏强"
+        score -= 5
+    elif 72 < rsi <= 75:
+        rsi_tier = "🔴高位"
+        score -= 10
+    elif 75 < rsi <= 78:
+        rsi_tier = "高位热"
+        score -= 15
+    elif 78 < rsi <= 82:
+        rsi_tier = "高位热"
+        score -= 25
+    else:
+        rsi_tier = "❌超买"
+    # Store tier penalty value for subscores record
+    tier_penalty_map = {"🟡偏强": -5.0, "🔴高位": -10.0, "高位热": -25.0, "❌超买": -40.0}
+    subscores["rsi_tier_penalty"] = tier_penalty_map.get(rsi_tier, 0.0)
+
+    # ── RSI 动量加分（加速上涨中的股继续涨）───────────────────────
+    # RSI动量 = RSI今日 - RSI昨日
+    # RSI动量 > +5: 加速中 → +5分
+    # RSI动量 > +8: 强烈加速 → +10分
+    # RSI动量 < -5: 开始回落 → 扣5分
+    rsi_momentum_score = 0.0
+    if rsi_momentum > 8:
+        rsi_momentum_score = 10.0
+    elif rsi_momentum > 5:
+        rsi_momentum_score = 5.0
+    elif rsi_momentum < -5:
+        rsi_momentum_score = -5.0
+    subscores["rsi_momentum"] = round(rsi_momentum, 2)
+    subscores["rsi_momentum_score"] = round(rsi_momentum_score, 2)
+    score += rsi_momentum_score
+
+    # ── 量能加速度（连续放量 = 主力参与）─────────────────────────
+    # vol_accel = 今日成交量 / 昨日成交量
+    vol_today = float(prepared.volume[idx]) if idx >= 0 else 1.0
+    vol_yesterday = float(prepared.volume[idx-1]) if idx >= 1 else vol_today
+    vol_accel = vol_today / vol_yesterday if vol_yesterday > 0 else 1.0
+    volume_accel_score = 0.0
+    if vol_accel >= 2.0:
+        volume_accel_score = 8.0   # 今日量是昨日2倍以上，强力放量
+    elif vol_accel >= 1.5:
+        volume_accel_score = 5.0   # 明显放量
+    elif vol_accel >= 1.2:
+        volume_accel_score = 2.0   #温和放量
+    subscores["volume_accel"] = round(vol_accel, 2)
+    subscores["volume_accel_score"] = round(volume_accel_score, 2)
+    score += volume_accel_score
+
     # ── 近10日涨停加分 ─────────────────────────────────
     # 涨停阈值：前复权数据中单日涨幅 >= 9.5%（留0.5%容差）
     recent_gains = prepared.gains[idx - 9: idx + 1]   # 最近10个交易日（含今日）
@@ -921,6 +990,11 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "sector_name": sector_name,
         "sector_bonus_applied": sector_bonus_applied,
         "limit_up_bonus": limit_up_bonus,
+        "rsi_tier": rsi_tier,
+        "rsi_momentum": round(rsi_momentum, 2),
+        "rsi_momentum_score": round(rsi_momentum_score, 2),
+        "volume_accel": round(vol_accel, 2),
+        "volume_accel_score": round(volume_accel_score, 2),
     }
 
 
@@ -964,6 +1038,11 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         sector_name=result.get("sector_name"),
         sector_bonus_applied=result.get("sector_bonus_applied", 0.0),
         limit_up_bonus=result.get("limit_up_bonus", 0.0),
+        rsi_tier=result.get("rsi_tier", "🟢健康"),
+        rsi_momentum=result.get("rsi_momentum", 0.0),
+        rsi_momentum_score=result.get("rsi_momentum_score", 0.0),
+        volume_accel=result.get("volume_accel", 0.0),
+        volume_accel_score=result.get("volume_accel_score", 0.0),
     )
 
 
@@ -976,7 +1055,7 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
     col_spec = (
         f"{_rpad('代码',10)}\t{_rpad('名称',8)}\t{_rpad('日期',12)}\t{_rpad('总分',6)}\t{_rpad('窗口涨幅',9)}\t"
         f"{_rpad('20日额(亿)',10)}\t{_rpad('5日换手',8)}\t{_rpad('RSI',6)}\t{_rpad('偏离MA20',9)}\t"
-        f"{_rpad('收盘',7)}\t{_rpad('EPS',7)}\t{_rpad('ROE%%',7)}\t{_rpad('盈利',5)}\t{_rpad('扣分',5)}"
+        f"{_rpad('收盘',7)}\t{_rpad('扣分',5)}"
     )
     lines.append(col_spec)
     lines.append("-" * 160)
@@ -1006,8 +1085,7 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
             f"{_rpad(code,10)}\t{_rpad(name,8)}\t{_rpad(signal_date,12)}\t{_lpad(f'{r.score:.1f}',6)}\t"
             f"{_lpad(f'{r.total_gain_window:+.2f}%',9)}\t{_lpad(f'{r.avg_amount_20:.2f}',10)}\t"
             f"{_lpad(f'{r.avg_turnover_5:.2f}%',8)}\t{_lpad(f'{r.rsi14:.1f}',6)}\t"
-            f"{_lpad(f'{r.extension_pct:+.2f}%',9)}\t{_lpad(f'{r.close:.2f}',7)}\t"
-            f"{_lpad(eps_str,7)}\t{_lpad(roe_str,7)}\t{_lpad(profit_str,5)}\t{_lpad(penalty_str,8)}"
+            f"{_lpad(f'{r.extension_pct:+.2f}%',9)}\t{_lpad(f'{r.close:.2f}',7)}\t{_lpad(penalty_str,8)}"
         )
         lines.append(row)
     lines.append("-" * 160)

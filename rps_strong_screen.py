@@ -38,6 +38,7 @@ from stock_trend.gain_turnover import (
 DEFAULT_WORKERS = 8
 DEFAULT_TOP_N = 50
 DEFAULT_MIN_VOLUME = 0.5e8  # 0.5亿
+DEFAULT_MIN_TURNOVER = 3.0  # %%（5日均换手率下限，市值相对）
 
 
 def _pad(s: str, width: int) -> str:
@@ -80,6 +81,7 @@ def calc_stock_rps(
 
         close = df["close"].astype(float)
         amount_vals = df["amount"].astype(float)
+        turnover_vals = df["turnover"].astype(float)
 
         name = ""
         if names_cache is not None:
@@ -89,9 +91,9 @@ def calc_stock_rps(
         if "ST" in name or "S" in name:
             return None
 
-        # 成交额过滤（20日均）
-        avg_amount = float(amount_vals.iloc[-20:].mean())
-        if avg_amount < DEFAULT_MIN_VOLUME:
+        # 换手率过滤（5日均，替代绝对成交额，市值相对）
+        avg_turnover_5 = float(turnover_vals.iloc[-5:].mean())
+        if avg_turnover_5 < DEFAULT_MIN_TURNOVER:
             return None
 
         # 计算各周期涨幅
@@ -139,7 +141,7 @@ def calc_stock_rps(
             "ret120": round(ret120, 2),
             "ret5": round(ret5, 2) if ret5 else 0.0,
             "rsi": round(rsi_val, 1),
-            "avg_amount": round(avg_amount / 1e8, 2),  # 亿
+            "avg_turnover_5": round(avg_turnover_5, 2),  # %
             "data_date": str(df["date"].iloc[-1]),
         }
 
