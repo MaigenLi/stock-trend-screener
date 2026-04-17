@@ -135,7 +135,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="按每日涨幅区间筛选股票（升级版，前复权）")
     parser.add_argument("--days", type=int, default=2, help="信号窗口天数")
     parser.add_argument("--min-gain", type=float, default=2.0, help="每日涨幅最小值%%")
-    parser.add_argument("--max-gain", type=float, default=7.0, help="每日涨幅最大值%%")
+    parser.add_argument("--max-gain", type=float, default=8.0, help="每日涨幅最大值%%")
     parser.add_argument("--quality-days", type=int, default=20, help="质量窗口天数")
     parser.add_argument("--turnover", type=float, default=1.5, help="5日平均换手率下限%%")
     parser.add_argument("--min-volume", type=float, default=1e8, help="20日平均成交额下限")

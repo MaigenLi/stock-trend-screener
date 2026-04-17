@@ -187,7 +187,7 @@ _CACHE_LOCKS_GUARD = threading.Lock()
 class StrategyConfig:
     signal_days: int = 2
     min_gain: float = 2.0
-    max_gain: float = 7.0
+    max_gain: float = 8.0
     quality_days: int = 20
     min_turnover: float = 1.5
     min_amount: float = 1e8

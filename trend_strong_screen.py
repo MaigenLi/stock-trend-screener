@@ -542,7 +542,7 @@ def scan_market(codes: List[str],
     print(f"\n  扫描完成！{time.time()-t0:.1f}秒，共 {len(results)} 只通过阈值筛选")
 
     results.sort(key=lambda x: x[2], reverse=True)
-    return results[:top_n]
+    return results if top_n <= 0 else results[:top_n]
 
 
 def print_result(results: List[Tuple], title: str = "趋势强势股 v2"):

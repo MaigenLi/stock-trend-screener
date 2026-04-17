@@ -225,7 +225,7 @@ def find_latest_screen_output() -> Optional[Path]:
     16:40 执行时，今日 screening 大概率还在运行中，取前一天的输出最准确。
     支持格式：
       - daily_screen_YYYY-MM-DD.txt（gain_turnover_screen.py 默认输出）
-      - daily_screen_YYYY-MM-DD.txt
+      - triple_screen_YYYY-MM-DD.txt（三步量化选股系统输出）
     """
     reports_dir = Path.home() / "stock_reports"
     today = datetime.now()
@@ -233,7 +233,7 @@ def find_latest_screen_output() -> Optional[Path]:
     yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # 支持两种文件名格式
-    patterns = ["daily_screen_*.txt"]
+    patterns = ["daily_screen_*.txt", "triple_screen_*.txt"]
     candidates: list[Path] = []
     for pat in patterns:
         candidates.extend(reports_dir.glob(pat))
