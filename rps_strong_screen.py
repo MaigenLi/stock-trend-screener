@@ -38,7 +38,7 @@ from stock_trend.gain_turnover import (
 DEFAULT_WORKERS = 8
 DEFAULT_TOP_N = 50
 DEFAULT_MIN_VOLUME = 0.5e8  # 0.5亿
-DEFAULT_MIN_TURNOVER = 3.0  # %%（5日均换手率下限，市值相对）
+DEFAULT_MIN_TURNOVER = 2.0  # %%（5日均换手率下限，市值相对）
 
 
 def _pad(s: str, width: int) -> str:

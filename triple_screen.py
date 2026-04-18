@@ -43,14 +43,14 @@ from stock_trend import trend_strong_screen as tss
 from stock_trend import rps_strong_screen as rps
 
 # ── 默认参数 ─────────────────────────────────────────────
-DEFAULT_RPS_COMPOSITE = 80.0   # Step1: RPS综合分门槛
+DEFAULT_RPS_COMPOSITE = 75.0   # Step1: RPS综合分门槛
 DEFAULT_RSI_LOW = 50.0         # Step1: RSI下限（须在均线上方，下跌趋势排除）
-DEFAULT_RSI_HIGH = 82.0        # Step1: RSI上限（>82才超买排除，75~82高位区扣分）
+DEFAULT_RSI_HIGH = 80.0        # Step1: RSI上限（>82才超买排除，75~82高位区扣分）
 DEFAULT_RPS20_MIN = 75.0       # Step1: RPS20门槛（近期强势）
 DEFAULT_MAX_RET20 = 40.0       # Step1: 20日涨幅上限（避开暴涨）
-DEFAULT_MAX_RET5 = 20.0        # Step1: 近5日涨幅上限（避免刚暴涨后入场）
+DEFAULT_MAX_RET5 = 30.0        # Step1: 近5日涨幅上限（近期过速上涨则排除）
 DEFAULT_RET3_MIN = 3.0         # Step1: 近3日涨幅下限（剔除横盘，等于窗口加速确认）
-DEFAULT_MIN_TURNOVER_STEP1 = 3.0  # Step1: 5日均换手率下限（%%，市值相对）
+DEFAULT_MIN_TURNOVER_STEP1 = 2.0  # Step1: 5日均换手率下限（%%，市值相对）
 DEFAULT_TREND_TOP = 100       # Step2: trend 保留数量（0=全部）
 DEFAULT_TREND_SCORE = 30.0    # Step2: 趋势评分门槛
 DEFAULT_GAIN_DAYS = 3
