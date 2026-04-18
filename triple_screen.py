@@ -85,6 +85,15 @@ def step1_rps(
 
     df_all = rps.scan_rps(all_codes, top_n=len(all_codes), max_workers=max_workers, target_date=target_date)
 
+    # ── 排除当日无数据的股票 ──────────────────────────────
+    if target_date is not None:
+        target_str = target_date.strftime("%Y-%m-%d")
+        before_count = len(df_all)
+        df_all = df_all[df_all["data_date"] == target_str]
+        after_count = len(df_all)
+        if before_count != after_count:
+            print(f"   ⚠️  排除当日无数据股票: {before_count - after_count} 只（缓存最新日期 < {target_str}），剩余 {after_count} 只")
+
     # 若指定了 codes，则只保留指定范围
     if codes is not None:
         codes_lower = {c.lower() for c in codes}
@@ -252,9 +261,29 @@ def load_consecutive_counts(target_date: datetime | None) -> tuple[dict[str, int
     if not candidates:
         return {}, {}
 
-    prev_file = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
-
+    # 从文件名日期中提取实际交易日期（不用 mtime，所有文件今天生成的 mtime 相同）
     import re
+    date_pat = re.compile(r"(\d{4}-\d{2}-\d{2})")
+    prev_file = None
+    prev_date: datetime | None = None
+    for p in candidates:
+        m = date_pat.search(p.name)
+        if not m:
+            continue
+        try:
+            file_date = datetime.strptime(m.group(1), "%Y-%m-%d")
+        except ValueError:
+            continue
+        if file_date.date() >= today.date():
+            continue
+        if prev_date is None or file_date > prev_date:
+            prev_date = file_date
+            prev_file = p
+
+    if not prev_file:
+        return {}, {}
+
+    # Parse consecutive counts from prev_file
     code_pat = re.compile(r"^(sh|sz|bj)(\d{6})$")
     consec_pat = re.compile(r"连号[:：]?(\d+)")
     rsi_pat = re.compile(r"连档[:：]?(\d+)")
@@ -340,8 +369,9 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
         t_info = trend_dict.get(r.code.lower(), {})
         rps_c = info.get("composite", 0.0)
         trend_s = t_info.get("total_score", 0.0)
-        consec_today = (yesterday_consec.get(r.code.lower(), 0) + 1
-                        if r.code.lower() in yesterday_consec else 0)
+        prev_c = yesterday_consec.get(r.code.lower(), 0)
+        # 昨天有连续（>0）→ +1；昨天为0（首次入选）→ 输出0（还不是连号）
+        consec_today = prev_c + 1 if prev_c > 0 else 0
         fatigue_penalty = 0.8 if consec_today >= 3 else 1.0
         return (r.score * 0.4 + rps_c * 0.3 + trend_s * 0.3) * fatigue_penalty
 
@@ -375,9 +405,9 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
         if extras:
             penalty_str = " ".join(extras)
 
-        # 连号 = 昨天连号 + 1；昨天没有的 = 0
-        consec_today = (yesterday_consec.get(code.lower(), 0) + 1
-                        if code.lower() in yesterday_consec else 0)
+        prev_c = yesterday_consec.get(code.lower(), 0)
+        # 昨天有连续（>0）→ +1；昨天为0（首次入选）→ 输出0（还不是连号）
+        consec_today = prev_c + 1 if prev_c > 0 else 0
 
         # RSI 连档：昨天也在高位区(>72) → +1；否则 → 0
         # RSI 高位区：> 72

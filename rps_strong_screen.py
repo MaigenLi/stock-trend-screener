@@ -76,6 +76,13 @@ def calc_stock_rps(
         df = load_qfq_history(code, end_date=end_date, adjust="qfq")
         if df is None or df.empty:
             return None
+
+        actual_last = str(df["date"].iloc[-1])[:10]
+        # 校验：指定了目标日期，数据必须包含该日期
+        if target_date is not None and actual_last < end_date:
+            # 数据实际最新日期 < 目标日期，说明目标日期无交易或数据未更新
+            return None
+
         if len(df) < 130:  # 至少需要120日数据
             return None
 
@@ -142,7 +149,7 @@ def calc_stock_rps(
             "ret5": round(ret5, 2) if ret5 else 0.0,
             "rsi": round(rsi_val, 1),
             "avg_turnover_5": round(avg_turnover_5, 2),  # %
-            "data_date": str(df["date"].iloc[-1]),
+            "data_date": actual_last,
         }
 
     except Exception:

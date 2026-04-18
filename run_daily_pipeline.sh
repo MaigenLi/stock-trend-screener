@@ -19,14 +19,14 @@ echo "[$(date '+%H:%M:%S')] 步骤1完成，休息60秒..."
 sleep 60
 
 # 步骤2：缓存前复权日线（默认开启验证）
-echo "[$(date '+%H:%M:%S')] 步骤2/6: cache_qfq_daily.py --refresh"
-${PYTHON} ${WORKSPACE}/cache_qfq_daily.py --refresh >> ${LOG_DIR}/qfq_cache.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤2/6: cache_qfq_daily.py --date ${DATE} --refresh"
+${PYTHON} ${WORKSPACE}/cache_qfq_daily.py --date ${DATE} --refresh >> ${LOG_DIR}/qfq_cache.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤2完成，休息60秒..."
 sleep 60
 
 # 步骤3：信号验证
-echo "[$(date '+%H:%M:%S')] 步骤3/6: signal_validator.py"
-${PYTHON} ${WORKSPACE}/signal_validator.py >> ${LOG_DIR}/signal_validation.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤3/6: signal_validator.py --date ${DATE}"
+${PYTHON} ${WORKSPACE}/signal_validator.py --date ${DATE} >> ${LOG_DIR}/signal_validation.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤3完成，休息60秒..."
 sleep 60
 
@@ -40,7 +40,7 @@ sleep 60
 echo "[$(date '+%H:%M:%S')] 步骤5/6: gain_turnover_screen.py --check-fundamental --sector-bonus"
 #${PYTHON} ${WORKSPACE}/gain_turnover_screen.py --check-fundamental --sector-bonus --check-volume-surge --days 3 --max-gain 8 --top-n 200 >> ${LOG_DIR}/daily_screen.log 2>&1
 #${PYTHON} ${WORKSPACE}/triple_screen.py --check-fundamental --check-volume-surge --sector-bonus --days 3 --min-gain 2 --max-gain 8 >> ${LOG_DIR}/daily_screen.log 2>&1
-${PYTHON} ${WORKSPACE}/triple_screen.py --days 3 --min-gain 2 --max-gain 10 >> ${LOG_DIR}/daily_screen.log 2>&1
+${PYTHON} ${WORKSPACE}/triple_screen.py --date ${DATE} --days 3 --min-gain 2 --max-gain 10 >> ${LOG_DIR}/daily_screen.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤5完成，休息60秒..."
 sleep 60
 
