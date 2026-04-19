@@ -643,6 +643,8 @@ class SignalResult:
     sector_name: Optional[str] = None
     sector_bonus_applied: float = 0.0
     limit_up_bonus: float = 0.0
+    top_risk_penalty: float = 0.0    # 见顶风险扣分（P0）
+    top_risk_reason: str = ""         # 见顶风险原因
     rsi_tier: str = ""   # 🟢低位/🟡健康/🔴高位/高位热/❌超买
     rsi_momentum: float = 0.0   # RSI今日 - RSI昨日（RSI动量）
     rsi_momentum_score: float = 0.0  # RSI动量得分
@@ -799,6 +801,9 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if rsi >= 82:
         return None
 
+    # ── P0: 见顶风险过滤（6项见顶信号 + RECOVER 化解）─────────────
+    top_risk_penalty, top_risk_reason = check_top_risk(prepared, idx)
+
     # 评分系统（总分100）
     score = 0.0
     subscores: Dict[str, float] = {}
@@ -911,6 +916,57 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     subscores["candle_quality"] = round(candle_quality, 2)
     score += candle_quality
 
+    # ── P1: 形态质量加分 ─────────────────────────────────────────
+    form_bonus = 0.0
+
+    # CONSIST: 10日内 ≥ 7天收盘在 MA10 上方（稳定性）
+    n_consist = min(config.signal_days, 10)
+    if n_consist >= 7 and idx >= n_consist:
+        c_arr = prepared.close[idx - n_consist + 1: idx + 1]
+        ma10_arr = prepared.ma10[idx - n_consist + 1: idx + 1]
+        above_ma10 = int(np.sum(c_arr > ma10_arr))
+        if above_ma10 >= 7:
+            form_bonus += 5.0
+            subscores["consist_pass"] = True
+        else:
+            subscores["consist_pass"] = False
+    else:
+        subscores["consist_pass"] = False
+
+    # F_HL: 低点抬升（近5日低点 > 前5日低点 > 再前5日低点）
+    if idx >= 15:
+        low_0_4  = float(np.nanmin(prepared.low[idx - 4: idx + 1]))
+        low_5_9  = float(np.nanmin(prepared.low[idx - 9: idx - 4]))
+        low_10_14 = float(np.nanmin(prepared.low[idx - 14: idx - 9]))
+        if low_0_4 > low_5_9 > low_10_14:
+            form_bonus += 5.0
+            subscores["f_hl_pass"] = True
+        else:
+            subscores["f_hl_pass"] = False
+    else:
+        subscores["f_hl_pass"] = False
+
+    # F_BP: 平台突破（近15日振幅 < 15%，放量突破前高，量 > MA20量 × 1.3）
+    if idx >= 16:
+        close_15 = prepared.close[idx - 15: idx]
+        range_15 = (float(np.nanmax(close_15)) - float(np.nanmin(close_15))) / float(np.nanmax(close_15)) * 100.0
+        high_15 = float(np.nanmax(close_15))
+        ma20_amt_today = float(prepared.avg_amount_20[idx]) if not np.isnan(prepared.avg_amount_20[idx]) else 0.0
+        ma20_amt_prior = float(prepared.avg_amount_20[idx - 1]) if not np.isnan(prepared.avg_amount_20[idx - 1]) else ma20_amt_today
+        vol_3d = float(np.nanmean(prepared.volume[idx - 2: idx + 1]))
+        today_vol = float(prepared.volume[idx])
+        avg_vol = max(vol_3d, today_vol)
+        if range_15 < 15.0 and close > high_15 and ma20_amt_prior > 0 and avg_vol >= ma20_amt_prior * 1.3:
+            form_bonus += 5.0
+            subscores["f_bp_pass"] = True
+        else:
+            subscores["f_bp_pass"] = False
+    else:
+        subscores["f_bp_pass"] = False
+
+    subscores["form_bonus"] = form_bonus
+    score += form_bonus
+
     # 7) RSI/不过热 10
     rsi_score = 0.0
     if 45 <= rsi <= 72:
@@ -1012,6 +1068,12 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
             sector_bonus_applied = config.sector_bonus_pts
             score += sector_bonus_applied
 
+    # ── 见顶风险扣分 ─────────────────────────────────────────────
+    if top_risk_penalty < 0:
+        score += top_risk_penalty   # e.g. -30（6项全触发）
+        subscores["top_risk_penalty"] = top_risk_penalty
+        subscores["top_risk_reason"] = top_risk_reason
+
     if score < config.score_threshold:
         return None
 
@@ -1051,6 +1113,8 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "sector_name": sector_name,
         "sector_bonus_applied": sector_bonus_applied,
         "limit_up_bonus": limit_up_bonus,
+        "top_risk_penalty": subscores.get("top_risk_penalty", 0.0),
+        "top_risk_reason": subscores.get("top_risk_reason", "无见顶信号"),
         "rsi_tier": rsi_tier,
         "rsi_momentum": round(rsi_momentum, 2),
         "rsi_momentum_score": round(rsi_momentum_score, 2),
@@ -1099,6 +1163,8 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         sector_name=result.get("sector_name"),
         sector_bonus_applied=result.get("sector_bonus_applied", 0.0),
         limit_up_bonus=result.get("limit_up_bonus", 0.0),
+        top_risk_penalty=result.get("top_risk_penalty", 0.0),
+        top_risk_reason=result.get("top_risk_reason", ""),
         rsi_tier=result.get("rsi_tier", "🟢健康"),
         rsi_momentum=result.get("rsi_momentum", 0.0),
         rsi_momentum_score=result.get("rsi_momentum_score", 0.0),
@@ -1171,3 +1237,171 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
                 f"{r.fundamental_penalty:>5}"
             )
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P0: 见顶风险过滤（6项见顶信号 + RECOVER 化解机制）
+# ─────────────────────────────────────────────────────────────────────────────
+def _compute_macd(closes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """返回 (dif, dea, macd)，用标准参数 EMA(12,26,9)。"""
+    ema12 = _ema(closes, 12)
+    ema26 = _ema(closes, 26)
+    dif = ema12 - ema26
+    dea = _ema(dif, 9)
+    macd = (dif - dea) * 2.0   # 柱状图
+    return dif, dea, macd
+
+
+def _ema(series: np.ndarray, n: int) -> np.ndarray:
+    """指数移动平均，pandas风格。"""
+    import pandas as pd
+    s = pd.Series(series)
+    return s.ewm(span=n, adjust=False).mean().to_numpy()
+
+
+def check_top_risk(prepared: PreparedData, idx: int) -> tuple[float, str]:
+    """
+    检查6项见顶风险信号，返回 (penalty, reason)。
+    penalty < 0 表示有风险；reason 描述风险内容。
+    如果满足 RECOVER 条件（强势反包），penalty = 0。
+    """
+    PENALTY_PER_SIGNAL = -10.0   # 每个信号扣分
+    MAX_LOOKBACK = 20            # 最大回溯天数
+
+    lookback = min(idx, MAX_LOOKBACK)
+    if lookback < 5:
+        return 0.0, ""
+
+    close_arr = prepared.close[idx - lookback: idx + 1]
+    open_arr  = prepared.open_[idx - lookback: idx + 1]
+    high_arr  = prepared.high[idx - lookback: idx + 1]
+    low_arr   = prepared.low[idx - lookback: idx + 1]
+    vol_arr   = prepared.volume[idx - lookback: idx + 1]
+
+    today_close = float(close_arr[-1])
+    today_open  = float(open_arr[-1])
+    today_vol   = float(vol_arr[-1])
+    today_gain  = float(prepared.gains[idx]) if not np.isnan(prepared.gains[idx]) else 0.0
+
+    # 基础指标
+    ma5_vol  = float(np.nanmean(vol_arr[-6:-1]))   # 前5日均量（不含今日）
+    ma5_vol_y = float(np.nanmean(vol_arr[-6:-1]))  # 同上（用于昨日5日均量）
+    vol_arr_for_ma5 = vol_arr[:-1]  # 排除今日
+    ma5_vol_calc = float(np.nanmean(vol_arr_for_ma5[-5:])) if len(vol_arr_for_ma5) >= 5 else today_vol
+    ma5_vol_y_calc = float(np.nanmean(vol_arr_for_ma5[-6:-1])) if len(vol_arr_for_ma5) >= 6 else ma5_vol_calc
+
+    # 今日换手
+    today_to = float(prepared.true_turnover[idx]) if not np.isnan(prepared.true_turnover[idx]) else 0.0
+
+    # RECOVER 条件：涨幅>3% AND 收盘>MA20 AND 量>MA5均量
+    ma20_today = float(prepared.ma20[idx]) if not np.isnan(prepared.ma20[idx]) else 0.0
+    ma5_vol_today_ref = float(np.nanmean(vol_arr[-6:-1]))  # 前5日均量（含昨）
+    recover = (today_gain > 3.0) and (today_close > ma20_today > 0) and (today_vol > ma5_vol_today_ref)
+
+    total_penalty = 0.0
+    reasons = []
+
+    # ── 信号3: 缩量新高（3日内）────────────────────────────────
+    # 股价 >= 20日最高 × 0.98 AND 量 < 10日均量 × 0.6
+    lookback3 = min(lookback, 3)
+    bl_found = False
+    for d in range(lookback3):
+        c = float(close_arr[d])   # d=0 是最早天，d=lookback-1 是今天
+        h20 = float(np.nanmax(close_arr[d:min(d+20, len(close_arr))]))
+        vol_ma10 = float(np.nanmean(vol_arr[d:min(d+10, len(vol_arr))]))
+        if c >= h20 * 0.98 and vol_ma10 > 0 and float(vol_arr[d]) < vol_ma10 * 0.6:
+            bl_found = True
+            break
+    if bl_found:
+        total_penalty += PENALTY_PER_SIGNAL
+        reasons.append("缩量新高")
+
+    # ── 信号4: 高位放量大阴线（5日内）──────────────────────────
+    # 跌幅 > 5% AND 量 > 昨日5日均量 × 1.5
+    lookback5 = min(lookback, 5)
+    dayin_found = False
+    for d in range(lookback5):
+        if d == 0:
+            continue
+        prev_close = float(close_arr[d - 1])
+        curr_close = float(close_arr[d])
+        if prev_close <= 0:
+            continue
+        drop_pct = (prev_close - curr_close) / prev_close * 100.0
+        vol_prev_ma5 = float(np.nanmean(vol_arr[max(0,d-5):d])) if d >= 5 else float(np.nanmean(vol_arr[:d])) if d > 0 else today_vol
+        if drop_pct > 5.0 and float(vol_arr[d]) > vol_prev_ma5 * 1.5:
+            dayin_found = True
+            break
+    if dayin_found:
+        total_penalty += PENALTY_PER_SIGNAL
+        reasons.append("放量大阴")
+
+    # ── 信号5: 高位连续阴线（5日内阴线>=3天）───────────────────
+    # NO_LY: SUM(CLOSE<OPEN, 5) < 3（即阴线<3天才安全，等价于≥3则风险）
+    lookback5 = min(lookback, 5)
+    close_arr_5 = close_arr[-lookback5:] if lookback5 > 0 else close_arr
+    open_arr_5  = open_arr[-lookback5:] if lookback5 > 0 else open_arr
+    red_days = int(np.sum(close_arr_5 < open_arr_5))
+    if red_days >= 3:
+        total_penalty += PENALTY_PER_SIGNAL
+        reasons.append(f"连阴{red_days}天")
+
+    # ── 信号6: MACD高位死叉（5日内，DIF在零轴上方死叉）──────────
+    lookback5 = min(lookback, 5)
+    if lookback5 >= 2:
+        macd_close = prepared.close[idx - lookback5: idx + 1]
+        if len(macd_close) >= 27:
+            dif, dea, _ = _compute_macd(macd_close)
+            macd_found = False
+            for d in range(1, len(dif)):
+                # DIF 从上方（前一周期>0）下穿 DEA（当前<0）
+                if dif[d-1] > 0 and dif[d] < dea[d]:
+                    macd_found = True
+                    break
+            if macd_found:
+                total_penalty += PENALTY_PER_SIGNAL
+                reasons.append("MACD高位死叉")
+
+    # ── 信号①: 放量滞涨（5日内）────────────────────────────────
+    # 量是前5日均量2倍以上 AND 涨幅 < 1%
+    lookback5 = min(lookback, 5)
+    zz_found = False
+    for d in range(lookback5):
+        if d == 0:
+            continue
+        vol_ma5_prior = float(np.nanmean(vol_arr[max(0,d-5):d])) if d >= 5 else float(np.nanmean(vol_arr[:d])) if d > 0 else today_vol
+        gain_d = float(prepared.gains[idx - lookback5 + d]) if not np.isnan(prepared.gains[idx - lookback5 + d]) else 0.0
+        if vol_ma5_prior > 0 and float(vol_arr[d]) >= vol_ma5_prior * 2.0 and gain_d < 1.0:
+            zz_found = True
+            break
+    if zz_found:
+        total_penalty += PENALTY_PER_SIGNAL
+        reasons.append("放量滞涨")
+
+    # ── 信号②: 长上影线（3日内）────────────────────────────────
+    # 上影 >= 实体×2 AND 上影 > 股价×1% AND 振幅 > 2%
+    lookback3 = min(lookback, 3)
+    yx_found = False
+    for d in range(lookback3):
+        o = float(open_arr[d]); c = float(close_arr[d])
+        h = float(high_arr[d]); l = float(low_arr[d])
+        body = abs(c - o)
+        upper_shadow = max(h - max(o, c), 0)
+        full_range = max(h - l, 1e-6)
+        if (body > 0 and upper_shadow >= body * 2.0
+                and upper_shadow > today_close * 0.01
+                and full_range / today_close * 100.0 > 2.0):
+            yx_found = True
+            break
+    if yx_found:
+        total_penalty += PENALTY_PER_SIGNAL
+        reasons.append("长上影")
+
+    reason_str = "; ".join(reasons) if reasons else "无见顶信号"
+
+    # RECOVER: 强势反包化解所有风险
+    if recover and total_penalty < 0:
+        total_penalty = 0.0
+        reason_str = "RECOVER化解"
+
+    return total_penalty, reason_str
