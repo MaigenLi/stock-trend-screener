@@ -88,7 +88,11 @@ def calc_stock_rps(
 
         close = df["close"].astype(float)
         amount_vals = df["amount"].astype(float)
-        turnover_vals = df["turnover"].astype(float)
+        # 优先用真实换手率（volume / outstanding / 10000 * 100），无则降级
+        if "true_turnover" in df.columns and df["true_turnover"].notna().any():
+            turnover_vals = df["true_turnover"].astype(float)
+        else:
+            turnover_vals = df["turnover"].astype(float)
 
         name = ""
         if names_cache is not None:
@@ -114,6 +118,7 @@ def calc_stock_rps(
         ret60 = _ret(60)
         ret120 = _ret(120)
         ret5 = _ret(5)
+        ret3 = _ret(3)
 
         if ret20 is None or ret60 is None or ret120 is None:
             return None
@@ -147,6 +152,7 @@ def calc_stock_rps(
             "ret60": round(ret60, 2),
             "ret120": round(ret120, 2),
             "ret5": round(ret5, 2) if ret5 else 0.0,
+            "ret3": round(ret3, 2) if ret3 else 0.0,
             "rsi": round(rsi_val, 1),
             "avg_turnover_5": round(avg_turnover_5, 2),  # %
             "data_date": actual_last,

@@ -89,6 +89,10 @@ def step1_rps(
     if target_date is not None:
         target_str = target_date.strftime("%Y-%m-%d")
         before_count = len(df_all)
+        # scan_rps 返回空 DataFrame（0只有效）时无 data_date 列，需防御
+        if "data_date" not in df_all.columns:
+            print(f"   ⚠️  无有效股票数据（{len(df_all)} 只），跳过")
+            return pd.DataFrame(), pd.DataFrame()
         df_all = df_all[df_all["data_date"] == target_str]
         after_count = len(df_all)
         if before_count != after_count:
@@ -109,7 +113,7 @@ def step1_rps(
         (df_all["ret20"] <= max_ret20) &
         (df_all["ret20"] >= -10) &
         (df_all["ret5"] <= max_ret5) &
-        (df_all["ret20"] >= ret3_min) &
+        (df_all["ret3"] >= ret3_min) &
         (df_all["avg_turnover_5"] >= min_turnover)
     ].copy()
 

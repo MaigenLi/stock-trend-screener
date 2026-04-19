@@ -318,9 +318,28 @@ def _fetch_ak_qfq(code: str, adjust: str = "qfq") -> pd.DataFrame:
                 out["turnover"] = pd.to_numeric(out.get("turnover"), errors="coerce") * 100.0
                 for c in ["open", "high", "low", "close", "volume", "amount"]:
                     out[c] = pd.to_numeric(out.get(c), errors="coerce")
-                out = out[["date", "open", "high", "low", "close", "volume", "amount", "turnover"]]
+                # 真实换手率：vol × 100 / outstanding（%），用先乘后除避免浮点精度损失
+                if "outstanding_share" in out.columns:
+                    out["outstanding_share"] = pd.to_numeric(out["outstanding_share"], errors="coerce")
+                    vol = out["volume"].astype(float).values
+                    out_s = out["outstanding_share"].astype(float).values
+                    out["true_turnover"] = np.where(
+                        out_s > 0,
+                        np.round(vol * 100.0 / out_s, 2),
+                        np.nan
+                    )
+                    out["turnover"] = np.round(out["turnover"].values, 2)
+                else:
+                    out["outstanding_share"] = np.nan
+                    out["true_turnover"] = np.nan
+                out = out[["date", "open", "high", "low", "close", "volume", "amount",
+                           "turnover", "outstanding_share", "true_turnover"]]
                 out = out.dropna(subset=["date", "open", "high", "low", "close"]).sort_values("date").reset_index(drop=True)
-                return out
+                # daily 返回空数据（如某些科创板股票）时跳过，继续走 hist 回退
+                if out.empty:
+                    last_error = ValueError("daily returned empty DataFrame")
+                else:
+                    return out
         except Exception as e:
             last_error = e
             time.sleep(0.5)
@@ -357,7 +376,11 @@ def _fetch_ak_qfq(code: str, adjust: str = "qfq") -> pd.DataFrame:
                 if c not in df.columns:
                     df[c] = np.nan
                 df[c] = pd.to_numeric(df[c], errors="coerce")
-            df = df[["date", "open", "high", "low", "close", "volume", "amount", "turnover"]]
+            # hist 接口无 outstanding_share，降级写 NaN
+            df["outstanding_share"] = np.nan
+            df["true_turnover"] = np.nan
+            df = df[["date", "open", "high", "low", "close", "volume", "amount",
+                     "turnover", "outstanding_share", "true_turnover"]]
             df = df.dropna(subset=["date", "open", "high", "low", "close"]).sort_values("date").reset_index(drop=True)
             return df
         except Exception as e:
@@ -471,7 +494,11 @@ def load_qfq_history(
     refresh: bool = False,
     max_age_hours: float = 12.0,
 ) -> pd.DataFrame:
-    """加载前复权日线。优先本地缓存，缺失或过期时从 AkShare 拉取。"""
+    """加载前复权日线。优先本地缓存，缺失或过期时从 AkShare 拉取。
+
+    回测用法：显式传入 end_date（截止日），函数内部完成防未来数据泄漏截断。
+    实时用法：不传 end_date，自动取缓存最新日期（已验证无未来数据）。
+    """
     path = _cache_path(code, adjust=adjust)
     lock = get_lock(path.name)
 
@@ -479,7 +506,7 @@ def load_qfq_history(
         use_cache = path.exists() and not refresh
         if use_cache and max_age_hours > 0:
             age_hours = (time.time() - path.stat().st_mtime) / 3600.0
-            if age_hours > max_age_hours and end_date is None:
+            if age_hours > max_age_hours:
                 use_cache = False
 
         if use_cache:
@@ -501,12 +528,36 @@ def load_qfq_history(
     if df is None or df.empty:
         return pd.DataFrame()
 
-    if start_date is not None:
-        start_ts = pd.Timestamp(start_date)
-        df = df[df["date"] >= start_ts]
+    # 统一时间类型
+    df["date"] = pd.to_datetime(df["date"])
+
+    # 确定截止时间戳
     if end_date is not None:
         end_ts = pd.Timestamp(end_date)
-        df = df[df["date"] <= end_ts]
+    else:
+        # 实时模式：默认截到缓存已有最新日期（已保证无未来数据）
+        end_ts = pd.Timestamp(df["date"].max())
+
+    # ★ 第一步：截断 end_date（防止未来数据泄漏，必须在最前面）
+    #max_raw_date = df["date"].max()
+    df = df[df["date"] <= end_ts]
+
+    # ★ 第二步：立即检查截断是否有效（截断后仍有数据超出 end_ts 则报错）
+    if not df.empty and df["date"].max() > end_ts:
+        raise RuntimeError(
+            f"未来数据泄漏检测：max_date={df['date'].max()} > end_date={end_ts}，"
+            f"缓存 {path.name} 包含 end_date 之后的未来数据，请删除缓存后重试"
+        )
+
+    # ★ 第三步：截断 start_date
+    if start_date is not None:
+        start_ts = pd.Timestamp(start_date)
+        if start_ts > end_ts:
+            raise ValueError(
+                f"参数错误：start_date ({start_ts}) > end_date ({end_ts})"
+            )
+        df = df[df["date"] >= start_ts]
+
     return df.sort_values("date").reset_index(drop=True)
 
 
@@ -552,7 +603,8 @@ class PreparedData:
     close: np.ndarray
     volume: np.ndarray
     amount: np.ndarray
-    turnover: np.ndarray
+    turnover: np.ndarray      # 原始换手率（AkShare）
+    true_turnover: np.ndarray  # 真实换手率：volume / (outstanding * 10000) * 100
     gains: np.ndarray
     ma5: np.ndarray
     ma10: np.ndarray
@@ -609,7 +661,21 @@ def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
     close = x["close"].astype(float).values
     volume = x["volume"].astype(float).values
     amount = x["amount"].astype(float).values
-    turnover = x["turnover"].astype(float).values if "turnover" in x.columns else np.full(len(x), np.nan)
+    turnover = (np.round(x["turnover"].astype(float).values, 2)
+                if "turnover" in x.columns else np.full(len(x), np.nan))
+
+    # 真实换手率：vol × 100 / outstanding（%），先乘后除避免浮点精度损失
+    if "outstanding_share" in x.columns and "true_turnover" not in x.columns:
+        outstanding = x["outstanding_share"].astype(float).values
+        true_turnover = np.where(
+            outstanding > 0,
+            np.round(volume * 100.0 / outstanding, 2),
+            np.round(turnover, 2)  # 降级：无法计算时用原始换手率
+        )
+    elif "true_turnover" in x.columns:
+        true_turnover = np.round(x["true_turnover"].astype(float).values, 2)
+    else:
+        true_turnover = np.round(turnover.copy(), 2)  # 历史缓存无 outstanding 时降级
 
     gains = np.full(len(x), np.nan, dtype=float)
     gains[1:] = (close[1:] / np.where(close[:-1] > 0, close[:-1], np.nan) - 1.0) * 100.0
@@ -620,8 +686,8 @@ def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
     ma60 = rolling_mean(close, 60)
     avg_amount_5 = rolling_mean(amount, 5)
     avg_amount_20 = rolling_mean(amount, 20)
-    avg_turnover_5 = rolling_mean(turnover, 5)
-    avg_turnover_20 = rolling_mean(turnover, 20)
+    avg_turnover_5 = rolling_mean(true_turnover, 5)
+    avg_turnover_20 = rolling_mean(true_turnover, 20)
     rsi14 = compute_rsi(close, 14)
 
     return PreparedData(
@@ -634,6 +700,7 @@ def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
         volume=volume,
         amount=amount,
         turnover=turnover,
+        true_turnover=true_turnover,
         gains=gains,
         ma5=ma5,
         ma10=ma10,
@@ -661,29 +728,23 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         return None
 
     # ── 质量窗口过滤（可选）：近quality_days个交易日内必须有明显放量区间
+    # 逻辑：质量窗口内，任意连续 surge_days 日均 true_turnover >= 前 surge_days 日均 × 1.30
+    # 例：--days 2 → 窗口1-2 vs 3-4, 窗口2-3 vs 4-5, ..., 均满足则通过
     if config.check_volume_surge and config.quality_days >= 5:
         q_start = idx - config.quality_days + 1
-        quality_amounts = prepared.amount[q_start: idx + 1]
-        if len(quality_amounts) >= 5:
-            # 滑动窗口：1-5 vs 6-10，2-6 vs 7-11，3-7 vs 8-12，...
-            # 成交额放大 volume_surge_ratio 倍 OR 换手率（5日均值）>= 10%，满足任一即为放量
-            n = len(quality_amounts)
-            found_surge = False
-            for i in range(n - 9):
-                prev_amt = float(np.nanmean(quality_amounts[i:i+5]))
-                curr_amt = float(np.nanmean(quality_amounts[i+5:i+10]))
-                # 成交额放大
-                amt_ok = (not np.isnan(prev_amt)) and (not np.isnan(curr_amt)) \
-                         and (prev_amt > 0) and (curr_amt >= prev_amt * config.volume_surge_ratio)
-                # 换手率：当前5日窗口原始换手率均值 >= 10%
-                raw_turn_vals = prepared.turnover[q_start + i + 5: q_start + i + 10]
-                curr_turn_avg = float(np.nanmean(raw_turn_vals)) if len(raw_turn_vals) > 0 else 0.0
-                turn_ok = (not np.isnan(curr_turn_avg)) and (curr_turn_avg >= 10.0)
-                if amt_ok or turn_ok:
-                    found_surge = True
-                    break
-            if not found_surge:
-                return None
+        quality_to = prepared.true_turnover[q_start: idx + 1]
+        surge_days = max(2, int(round(config.volume_surge_ratio)))  # 2.0=2天, 3.0=3天
+        found_surge = False
+        for i in range(len(quality_to) - surge_days * 2 + 1):
+            # 窗口A: quality_to[i : i+surge_days]  vs 窗口B: quality_to[i+surge_days : i+surge_days*2]
+            window_a = float(np.nanmean(quality_to[i: i + surge_days]))
+            window_b = float(np.nanmean(quality_to[i + surge_days: i + surge_days * 2]))
+            if (not np.isnan(window_a) and not np.isnan(window_b)
+                    and window_b > 0 and window_a >= window_b * 1.30):
+                found_surge = True
+                break
+        if not found_surge:
+            return None
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
     # 但最后一个交易日必须满足 > -3%（允许小幅回调但不超过 -3%）
