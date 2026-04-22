@@ -246,7 +246,7 @@ def step3_gain(
     check_volume_surge: bool = False,
     max_workers: int = 8,
     min_turnover: float = 2.0,
-    score_threshold: float = 30.0,
+    score_threshold: float = 40.0,
     show_rejected: bool = False,
 ) -> tuple[list, list]:
     t0 = time.time()
