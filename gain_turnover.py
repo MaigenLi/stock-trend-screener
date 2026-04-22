@@ -707,7 +707,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
             window_a = float(np.nanmean(quality_to[i: i + surge_days]))
             window_b = float(np.nanmean(quality_to[i + surge_days: i + surge_days * 2]))
             if (not np.isnan(window_a) and not np.isnan(window_b)
-                    and window_b > 0 and window_a >= window_b * 1.30):
+                    and window_b > 0 and window_a >= window_b * config.volume_surge_ratio):
                 found_surge = True
                 break
         if not found_surge:
@@ -826,7 +826,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         subscores["cross_rps"] = rps_val
         subscores["cross_rps_bonus"] = cross_rps_bonus
 
-    # 近10日涨停加分（+10）
+    # 近10日涨停加分（+3）
     recent_gains = prepared.gains[idx - 9: idx + 1]
     limit_up_bonus = 0.0
     if len(recent_gains) >= 10 and (~np.isnan(recent_gains)).sum() >= 10:
