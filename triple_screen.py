@@ -91,29 +91,19 @@ def step1_rps(
         df_all = df_all[df_all["code"].str.lower().isin(codes_lower)]
         print(f"   限定范围: {len(codes)} 只（其余用于排名计算）")
 
-    # 筛选策略：适合介入的蓄势股
+    # 筛选逻辑：与 rps_strong_screen.py 一致（仅 RPS 综合 + RPS20 门槛）
     df = df_all[
         (df_all["composite"] >= rps_composite) &
-        (df_all["ret20_rps"] >= rps20_min) &
-        (df_all["rsi"] >= rsi_low) &
-        (df_all["rsi"] <= rsi_high) &
-        (df_all["ret20"] <= max_ret20) &
-        (df_all["ret20"] >= -10) &
-        (df_all["ret5"] <= max_ret5) &
-        ((df_all["ret3"] >= ret3_min) |  # 正常：3日涨幅≥3%
-         (df_all["ma5_3day_above"] & (df_all["ret3"] >= 2.0))) &
-        (df_all["avg_turnover_5"] >= min_turnover)
+        (df_all["ret20_rps"] >= rps20_min)
     ].copy()
 
-    df = df.sort_values("composite", ascending=False)
+    df = df.sort_values("composite", ascending=False).head(50)
 
-    print(f"   策略: RPS综合≥{rps_composite}, RPS20≥{rps20_min}, RSI[{rsi_low},{rsi_high}], "
-          f"20日涨幅≤{max_ret20}%, 20日涨幅≥-10%, 近5日≤{max_ret5}%, 3日≥{ret3_min}%, "
-          f"5日换手≥{min_turnover}%)")
-    print(f"✅ Step1 完成: {len(df_all)} 只扫描 → {len(df)} 只蓄势强势股，用时 {time.time()-t0:.1f}s")
+    print(f"   策略: RPS综合≥{rps_composite}, RPS20≥{rps20_min}（与rps_strong_screen逻辑一致）")
+    print(f"✅ Step1 完成: {len(df_all)} 只扫描 → Top50 用时 {time.time()-t0:.1f}s")
     for _, row in df.head(5).iterrows():
-        print(f"   {row['code']} {row['name']:<8} 综合={row['composite']:.1f}  "
-              f"RPS20={row['ret20_rps']:.1f}  RSI={row['rsi']:.1f}  20日={row['ret20']:+.2f}%")
+        print(f"   {row['code']} {row.get('name',''):<8} 综合={row['composite']:.1f}  "
+              f"RPS20={row['ret20_rps']:.1f}")
 
     return df, df_all
 
@@ -444,11 +434,9 @@ def main():
         print("\n⚠️ Step1 无符合RPS策略的股票，退出")
         return
 
-    # Step 2（仅传入 Step1 Top50）
-    step1_top50 = step1_df.head(50)
-    print(f"   → 取 Step1 Top50 进入 Step2（实际 {len(step1_top50)} 只）")
+    # Step 2（Step1 已取 Top50）
     step2_df, _ = step2_trend(
-        step1_df=step1_top50,
+        step1_df=step1_df,
         top_n=0 if args.trend_top == 0 else args.trend_top,
         min_score=args.trend_score,
         max_workers=args.workers,
