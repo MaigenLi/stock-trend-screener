@@ -194,7 +194,8 @@ def step3_gain(
     max_workers: int = 8,
     min_turnover: float = 2.0,
     score_threshold: float = 40.0,
-) -> list:
+    show_rejected: bool = False,
+) -> tuple[list, list]:
     t0 = time.time()
     codes = step2_df["code"].str.lower().tolist()
 
@@ -223,8 +224,46 @@ def step3_gain(
         refresh_cache=False,
     )
 
-    print(f"✅ Step3 完成: {len(results)} 只入场候选，用时 {time.time()-t0:.1f}s")
-    return results
+    print(f"✅ Step3 完成: {len(results)} 只入场候选，用时 {time.time()-t0:.1f}s\n")
+
+    # ── 未入选股票诊断 ──────────────────────────────────
+    rejected = []
+    if show_rejected and results:
+        passed_codes = {r.code.lower() for r in results}
+        rejected_codes = [c for c in codes if c.lower() not in passed_codes]
+        end_date = target_date.strftime("%Y-%m-%d") if target_date else None
+        from stock_trend.gain_turnover import prepare_data
+        from gain_turnover_screen import load_qfq_history
+        for code in rejected_codes:
+            c = gt.normalize_prefixed(code)
+            df = load_qfq_history(c, end_date=end_date, adjust=config.adjust, refresh=False)
+            if df is None or df.empty:
+                rejected.append({"code": code, "name": "", "reasons": ["数据加载失败"]})
+                continue
+            if target_date is not None:
+                df = df[df["date"] <= pd.Timestamp(target_date.date())].reset_index(drop=True)
+            if df.empty:
+                rejected.append({"code": code, "name": "", "reasons": ["无目标日期数据"]})
+                continue
+            prep = prepare_data(df)
+            if prep is None:
+                rejected.append({"code": code, "name": "", "reasons": ["数据不足"], "idx": -1})
+                continue
+            idx = len(prep.dates) - 1
+            reasons = gt.diagnose_rejection(prep, idx, config)
+            name = gt.get_stock_name(c, gt.load_stock_names()) if hasattr(gt, 'get_stock_name') else ""
+            rejected.append({"code": code, "name": name, "reasons": reasons, "idx": idx})
+
+        if rejected:
+            print(f"📋 未入选股票 {len(rejected)} 只（Top50中 Step3 未通过）：")
+            print(f"   {'代码':<12} {'名称':<8} {'idx':<5} 失败原因")
+            print(f"   {'─'*80}")
+            for item in sorted(rejected, key=lambda x: x.get('code','')):
+                rsn_str = "; ".join(item["reasons"]) if item["reasons"] else "未知"
+                print(f"   {item['code']:<12} {item.get('name',''):<8} {item.get('idx',''):<5} {rsn_str}")
+            print()
+
+    return results, rejected
 
 
 # ─────────────────────────────────────────────────────────
@@ -385,6 +424,7 @@ def main():
     parser.add_argument("--min-turnover-step3", type=float, default=2.0, help="Step3 5日均换手率下限/%%（默认2.0）")
     parser.add_argument("--score-threshold-step3", type=float, default=40.0, help="Step3 评分门槛（默认40.0）")
     parser.add_argument("--market-stop-loss", type=float, default=DEFAULT_MARKET_STOP_LOSS, help=f"市场止损（%%，默认{DEFAULT_MARKET_STOP_LOSS}）")
+    parser.add_argument("--show-rejected", action="store_true", help="输出 Step3 未入选股票的失败原因")
     args = parser.parse_args()
 
     target_date = None
@@ -448,7 +488,7 @@ def main():
         return
 
     # Step 3
-    results = step3_gain(
+    results, rejected = step3_gain(
         step2_df=step2_df,
         signal_days=args.days,
         min_gain=args.min_gain,
@@ -462,6 +502,7 @@ def main():
         max_workers=args.workers,
         min_turnover=args.min_turnover_step3,
         score_threshold=args.score_threshold_step3,
+        show_rejected=args.show_rejected,
     )
 
     # 输出（路径与 gain_turnover_screen 保持一致）

@@ -988,7 +988,95 @@ def _ema(series: np.ndarray, n: int) -> np.ndarray:
     s = pd.Series(series)
     return s.ewm(span=n, adjust=False).mean().to_numpy()
 
-def _simplified_top_filter(prepared: PreparedData, idx: int) -> tuple[bool, str]:
+def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig) -> list[str]:
+    """诊断 evaluate_signal 失败原因，返回所有不满足的条件列表。"""
+    reasons = []
+    min_idx = max(config.signal_days + 1, config.quality_days, 60, config.min_history_days)
+    if idx < min_idx:
+        reasons.append(f"历史数据不足(idx={idx}<{min_idx})")
+        return reasons
+
+    signal_gains = prepared.gains[idx - config.signal_days + 1: idx + 1]
+    quality_gains = prepared.gains[idx - config.quality_days + 1: idx + 1]
+    if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
+        reasons.append("信号/质量窗口含NaN")
+
+    if config.check_volume_surge and config.quality_days >= 5:
+        q_start = idx - config.quality_days + 1
+        quality_to = prepared.true_turnover[q_start: idx + 1]
+        surge_days = max(2, int(round(config.volume_surge_ratio)))
+        found_surge = False
+        for i in range(len(quality_to) - surge_days * 2 + 1):
+            window_a = float(np.nanmean(quality_to[i: i + surge_days]))
+            window_b = float(np.nanmean(quality_to[i + surge_days: i + surge_days * 2]))
+            if (not np.isnan(window_a) and not np.isnan(window_b)
+                    and window_b > 0 and window_a >= window_b * config.volume_surge_ratio):
+                found_surge = True
+                break
+        if not found_surge:
+            reasons.append(f"质量窗口无明显放量({config.volume_surge_ratio}x)")
+
+    if config.min_gain > 0:
+        below_min = (signal_gains < config.min_gain).sum()
+        max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
+        last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
+        if not last_day_ok:
+            reasons.append("信号窗口末日军缩>-3%")
+        if below_min > max_allowed_below:
+            reasons.append(f"信号窗口{below_min}天<{config.min_gain}%(最多允{ max_allowed_below}天)")
+        if not np.all(signal_gains <= config.max_gain):
+            reasons.append(f"信号窗口存在哪天涨幅>{config.max_gain}%")
+    elif config.min_gain <= 0:
+        pass  # 不限制最低涨幅
+
+    avg_amt20 = prepared.avg_amount_20[idx]
+    if np.isnan(avg_amt20) or avg_amt20 < config.min_amount:
+        reasons.append(f"20日均成交额不足({avg_amt20/1e8:.1f}亿<{config.min_amount/1e8:.1f}亿)")
+
+    avg_to5 = prepared.avg_turnover_5[idx]
+    if config.min_turnover > 0 and (np.isnan(avg_to5) or avg_to5 < config.min_turnover):
+        reasons.append(f"5日均换手率不足({avg_to5:.2f}%<{config.min_turnover}%)")
+
+    ma5 = prepared.ma5[idx]; ma10 = prepared.ma10[idx]
+    ma20 = prepared.ma20[idx]; ma60 = prepared.ma60[idx]
+    if np.isnan(ma5) or np.isnan(ma10) or np.isnan(ma20) or np.isnan(ma60):
+        reasons.append("均线数据缺失(MA5/MA10/MA20/MA60)")
+
+    close = prepared.close[idx]
+    if not (close > ma5 >= ma10 * 0.995):
+        reasons.append(f"均线多头排列不符(收盘{close:.2f} ma5{ma5:.2f} ma10{ma10:.2f})")
+
+    rsi = prepared.rsi14[idx] if not np.isnan(prepared.rsi14[idx]) else 50.0
+    if rsi >= 82:
+        reasons.append(f"RSI={rsi:.1f}≥82超买过滤")
+
+    rejected_top, reason_top = _simplified_top_filter(prepared, idx)
+    if rejected_top:
+        reasons.append(f"见顶风险({reason_top})")
+
+    # 评分（独立计算，不修改prepared）
+    gain10 = float((prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0) if idx >= 10 else 0.0
+    ma20_val = float(prepared.ma20[idx])
+    ma60_val = float(prepared.ma60[idx]) if not np.isnan(prepared.ma60[idx]) else 0.0
+    ma20_above_ma60 = 1.0 if (ma20_val > ma60_val > 0) else 0.0
+    ma5_above_ma10 = 0.5 if (ma5 > ma10) else 0.0
+    trend = ma20_above_ma60 + ma5_above_ma10
+    if idx >= 60:
+        low_60 = float(np.nanmin(prepared.low[idx-60:idx]))
+        high_60 = float(np.nanmax(prepared.high[idx-60:idx]))
+        range_60 = high_60 - low_60
+        position = (close - low_60) / range_60 * 100.0 if range_60 > 0 else 50.0
+    else:
+        position = 50.0
+    position_score = max(100.0 - position * 0.5, 0.0)
+    W1, W4 = 1.0, 1.0
+    score = W1 * trend + W4 * (position_score / 100.0 * 5.0)
+    score = round(score / (W1 + W4) * 20.0, 2)
+    if score < config.score_threshold:
+        reasons.append(f"评分不足({score:.1f}<{config.score_threshold})")
+
+    return reasons
+
     """
     简化见顶过滤（仅3项）：
     - 放量大阴：跌幅>5% 且 量>MA5量×1.5（5日内）
