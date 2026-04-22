@@ -289,7 +289,7 @@ def score_momentum(df: pd.DataFrame, market_gain: float = 0.0) -> Tuple[float, D
 
     # 创20日新高
     if len(close) >= 22:
-        high_20d = float(close.iloc[-22:-1].max())
+        high_20d = float(close.iloc[-21:-1].max())
         near_high_ratio = float(close.iloc[-1]) / high_20d - 1 if high_20d > 0 else 0
         if near_high_ratio >= 0:
             new_high_score = 40
@@ -454,6 +454,7 @@ def evaluate_stock(code: str,
         raw = trend_score * WEIGHT_TREND + momentum_score * WEIGHT_MOMENTUM
         # 归一化：按实际满分归一（趋势满分100，动量满分110），再×100 → 0~100
         total = raw / (WEIGHT_TREND * 100.0 + WEIGHT_MOMENTUM * 110.0) * 100.0 - rsi_penalty
+        total = max(total, 0)
 
         return {
             "code": code,
