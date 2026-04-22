@@ -230,8 +230,8 @@ def scan_rps(
 
     # 综合排名分（考虑绝对涨幅 + RPS）
     df["composite"] = (
-        df["ret20_rps"] * 0.4 +
-        df["ret60_rps"] * 0.4 +
+        df["ret20_rps"] * 0.5 +
+        df["ret60_rps"] * 0.3 +
         df["ret120_rps"] * 0.2
     ).round(2)
 
@@ -282,7 +282,7 @@ def print_rps_table(df: pd.DataFrame, title: str = "RPS 热力图", top_n: int =
     print("RPS 说明：")
     print("  RPS20/RPS60/RPS120 = 该周期涨幅在全场排名百分比（0~100）")
     print("  均RPS = 三周期 RPS 等权平均")
-    print("  综合分 = RPS20×40% + RPS60×40% + RPS120×20%（相对强弱加权）")
+    print("  综合分 = RPS20×50% + RPS60×30% + RPS120×20%（相对强弱加权）")
     print("  20日% = 实际 20 日涨幅")
     print("过滤条件：RSI>88 过滤，10日涨幅>40% 过滤，成交额<0.5亿 过滤")
 

@@ -443,17 +443,15 @@ def evaluate_stock(code: str,
         momentum_score, momentum_factors = score_momentum(df, market_gain=market_gain)
         vol_score, vol_factors = score_vol_price(df)
 
-        # RSI 惩罚
-        # RSI 惩罚：真正按 RSI 区间扣分
+        # RSI 惩罚（>88的已在Step1硬过滤，仅处理82~88区间）
         rsi_penalty = 0
-        if rsi_val > 82:
+        if rsi_val >= 82:   # 82~88 区间扣5分
             rsi_penalty = 5
-        elif rsi_val > 75:
+        elif rsi_val > 75:  # 75~82 区间扣2分
             rsi_penalty = 2
 
-        raw = trend_score * WEIGHT_TREND + momentum_score * WEIGHT_MOMENTUM
-        # 归一化：按实际满分归一（趋势满分100，动量满分110），再×100 → 0~100
-        total = raw / (WEIGHT_TREND * 100.0 + WEIGHT_MOMENTUM * 110.0) * 100.0 - rsi_penalty
+        # 趋势评分 = 趋势分 - RSI惩罚（仅趋势维度）
+        total = trend_score - rsi_penalty
         total = max(total, 0)
 
         return {

@@ -863,7 +863,8 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     # 强制趋势过滤（仅保留核心约束）
     if not (close > ma5 >= ma10 * 0.995):
         return None
-    if rsi >= 82:
+    # 均线排列确认（短期趋势确认）
+    if not (ma5 > ma10 and ma10 > prepared.ma20[idx - 1] * 1.0):
         return None
 
     # ── 简化见顶过滤（改为软扣分，不硬过滤）──────────────────────
@@ -871,74 +872,13 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if rejected:
         signal_penalty += 5.0   # 见顶风险扣5分
 
-    # ── 线性评分模型 ─────────────────────────────────────────────
-    # score = w1*trend + w4*position + bonus
-    # 权重：w1=1.0(趋势) w4=1.0(位置)，动量/量能仅作展示不参与评分
-    # 满分100（趋势0~1.5 + 位置0~5，归一到100分）
+    # 线性评分模型（基础分100，扣分制）
     subscores: Dict[str, float] = {}
 
-    # 维度1: 趋势 (trend) - 1.0*(MA20>MA60) + 0.5*(MA5>MA10)，满分1.5
-    ma20_val = float(prepared.ma20[idx])
-    ma60_val = float(prepared.ma60[idx]) if not np.isnan(prepared.ma60[idx]) else 0.0
-    ma20_above_ma60 = 1.0 if (ma20_val > ma60_val > 0) else 0.0
-    ma5_above_ma10 = 0.5 if (ma5 > ma10) else 0.0
-    trend = ma20_above_ma60 + ma5_above_ma10   # 0~1.5
+    # 基础分 = 100，扣除见顶风险等软扣分
+    score = max(round(100.0 - signal_penalty, 2), 0.0)
 
-    # 维度2: 动量 (momentum) - 10日收益率，用tanh归一化（~0~100，仅展示）
-    momentum = float(np.tanh(gain10 / 20.0) * 100.0)  # ~0~100
-
-    # 维度3: 量能 (vol_ratio) - 当日换手/5日均换手，<1=缩量 >1=放量（仅展示）
-    to_today = float(prepared.true_turnover[idx]) if not np.isnan(prepared.true_turnover[idx]) else 0.0
-    to_ma5 = float(prepared.avg_turnover_5[idx]) if not np.isnan(prepared.avg_turnover_5[idx]) else 0.0
-    if to_ma5 > 0:
-        vol_ratio = to_today / to_ma5   # 1.0=正常, >1.5=放量, <0.5=缩量
-    else:
-        vol_ratio = 1.0
-    vol_score = float(np.tanh((vol_ratio - 1.0) * 2.0) * 50.0 + 50.0)  # ~0~100
-
-    # 维度4: 位置 (position) - 60日区间位置，越低越安全 (0=底部, 100=高位)，满分5
-    if idx >= 60:
-        low_60 = float(np.nanmin(prepared.low[idx-60:idx]))
-        high_60 = float(np.nanmax(prepared.high[idx-60:idx]))
-        range_60 = high_60 - low_60
-        if range_60 > 0:
-            position = (close - low_60) / range_60 * 100.0   # 0=低点, 100=高点
-        else:
-            position = 50.0
-    else:
-        position = 50.0
-    position_score = max(100.0 - position * 0.5, 0.0)   # 越低分越高（position=0→100分, 100→50分, 150→25分）
-
-    # 线性加权（仅趋势+位置，换手率只做过滤条件）
-    W1, W4 = 1.0, 1.0
-    score = W1 * trend + W4 * (position_score / 100.0 * 5.0)
-    # 换算为百分制（满分100），扣除信号窗口惩罚
-    score = max(round(score / (W1 + W4) * 20.0 - signal_penalty, 2), 0.0)
-
-    subscores["trend"] = round(trend, 3)
-    subscores["momentum"] = round(momentum, 2)
-    subscores["vol_score"] = round(vol_score, 2)
-    subscores["position"] = round(position, 2)
-    subscores["position_score"] = round(position_score, 2)
     subscores["signal_penalty"] = round(signal_penalty, 2)
-
-    # 截面RPS加分（0~10）
-    cross_rps_bonus = 0.0
-    if config.use_cross_rps and cross_rps and code:
-        c = normalize_prefixed(code)
-        rps_val = cross_rps.get(c, 50.0)
-        cross_rps_bonus = round(rps_val / 100.0 * 10.0, 2)
-        score = round(score + cross_rps_bonus, 2)
-        subscores["cross_rps"] = rps_val
-        subscores["cross_rps_bonus"] = cross_rps_bonus
-
-    # 近10日涨停加分（+3）
-    recent_gains = prepared.gains[idx - 9: idx + 1]
-    limit_up_bonus = 0.0
-    if len(recent_gains) >= 10 and (~np.isnan(recent_gains)).sum() >= 10:
-        if np.any(recent_gains >= 9.5):
-            limit_up_bonus = 3.0
-            score = round(score + limit_up_bonus, 2)
 
     if score < config.score_threshold:
         return None

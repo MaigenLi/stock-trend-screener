@@ -7,7 +7,7 @@ Step1: 综合RPS≥75，RSI 50~80，20日涨幅≤50%
 Step2: trend 验证趋势，确认均线多头
 Step3: gain_turnover 信号窗口启动（信号分仅含趋势+位置）
 
-综合评分：gain×0.5 + RPS综×0.1 + 趋势×0.5
+综合评分：gain×0.2 + RPS综×0.5 + 趋势×0.3
 
 输出：~/stock_reports/triple_screen_YYYY-MM-DD.txt
 """
@@ -30,11 +30,11 @@ from stock_trend import rps_strong_screen as rps
 from gain_turnover import _rpad, _lpad, normalize_prefixed
 DEFAULT_RPS_COMPOSITE = 75.0   # Step1: RPS综合分门槛
 DEFAULT_RSI_LOW = 50.0         # Step1: RSI下限（须在均线上方，下跌趋势排除）
-DEFAULT_RSI_HIGH = 82.0        # Step1: RSI上限（>82超买，>82扣5分，>75扣2分）
+DEFAULT_RSI_HIGH = 88.0        # Step1: RSI上限（>88超买过滤；82~88在Step2扣分）
 DEFAULT_RPS20_MIN = 75.0       # Step1: RPS20门槛（近期强势）
 DEFAULT_MAX_RET20 = 50.0       # Step1: 20日涨幅上限（避开暴涨）
 DEFAULT_MAX_RET5 = 30.0        # Step1: 近5日涨幅上限（近期过速上涨则排除）
-DEFAULT_RET3_MIN = 3.0         # Step1: 近3日涨幅下限（剔除横盘，等于窗口加速确认）
+DEFAULT_RET3_MIN = 5.0         # Step1: 近3日涨幅下限（剔除横盘，等于窗口加速确认）
 DEFAULT_MIN_TURNOVER_STEP1 = 2.0  # Step1: 5日均换手率下限（%%，市值相对）
 DEFAULT_TREND_TOP = 100       # Step2: trend 保留数量（0=全部）
 DEFAULT_TREND_SCORE = 30.0    # Step2: 趋势评分门槛
@@ -159,8 +159,7 @@ def step2_trend(
         )
         rows.append({
             "code": code, "name": name, "total_score": score,
-            "trend": trend_score, "momentum": momentum_score,
-            "vol": vol_score,   # 量能维度仅展示，不参与趋势评分
+            "trend": trend_score,   # 趋势维度仅展示
         })
 
     # 按 step1 顺序（综合分排序）保持不变，step2 只打分不排席
@@ -187,13 +186,13 @@ def step2_trend(
         df["_order"] = df["code"].map(code_order)
         df = df.sort_values("_order").drop(columns=["_order"])
 
-        # 列顺序：代码 | 名称 | RPS20 | RPS60 | RPS120 | 综合分 | 总分 | 趋势 | 动量 | 量价
+        # 列顺序：代码 | 名称 | RPS20 | RPS60 | RPS120 | 综合分 | 总分 | 趋势
         cols_show = ["code", "name", "ret20_rps", "ret60_rps", "ret120_rps",
-                     "composite", "total_score", "trend", "momentum", "vol"]
+                     "composite", "total_score", "trend"]
         show_df = df[[c for c in cols_show if c in df.columns]].copy()
 
         # 自动列宽对齐
-        header = ["代码", "名称", "RPS20", "RPS60", "RPS120", "综合分", "总分", "趋势", "动量", "量价"]
+        header = ["代码", "名称", "RPS20", "RPS60", "RPS120", "综合分", "总分", "趋势"]
         rows_out = []
         for _, r in show_df.iterrows():
             rows_out.append([
@@ -205,8 +204,6 @@ def step2_trend(
                 f"{r.get('composite', 0):.1f}" if pd.notna(r.get('composite')) else "-",
                 f"{r.get('total_score', 0):.1f}",
                 f"{r.get('trend', 0):.1f}",
-                f"{r.get('momentum', 0):.1f}",
-                f"{r.get('vol', 0):.1f}",
             ])
 
         # 名称列（中文字符宽度问题：用全角空格补齐到偶数宽度）
@@ -224,8 +221,7 @@ def step2_trend(
 
     print(f"✅ Step2 完成: {len(df)} 只趋势健康，用时 {time.time()-t0:.1f}s")
     for _, row in df.head(5).iterrows():
-        print(f"   {row['code']} {row.get('name',''):<8} 总分={row['total_score']:.1f}  "
-              f"趋势={row['trend']:.1f} 动量={row['momentum']:.1f} 量价={row['vol']:.1f}")
+        print(f"   {row['code']} {row.get('name',''):<8} 总分={row['total_score']:.1f}  趋势={row['trend']:.1f}")
 
     return df, raw_results
 
@@ -354,13 +350,13 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
     lines.append(col_spec)
     lines.append("-" * 160)
 
-    # 按综合评分排序：gain×0.5 + RPS综合×0.1 + trend×0.5
+    # 按综合评分排序：gain×0.2 + RPS综合×0.5 + trend×0.3
     def composite_score(r):
         info = rps_dict.get(r.code.lower(), {})
         t_info = trend_dict.get(r.code.lower(), {})
         rps_c = info.get("composite", 0.0)
         trend_s = t_info.get("total_score", 0.0)
-        return r.score * 0.5 + rps_c * 0.1 + trend_s * 0.5
+        return r.score * 0.2 + rps_c * 0.5 + trend_s * 0.3
 
     results = sorted(results, key=composite_score, reverse=True)
 
@@ -425,8 +421,8 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
         bonus_parts.append("近10日涨停+3")
     bonus_note = (" + " + " + ".join(bonus_parts)) if bonus_parts else ""
     lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10{bonus_note}")
-    lines.append(f"RSI分层(Step2扣分): 🟡>75扣2分 | 🔴>82扣5分")
-    lines.append(f"综合评分 = gain×0.5 + RPS综合×0.1 + 趋势×0.5（用于最终排序）" )
+    lines.append(f"RSI分层(Step2扣分): 🟡>75~82扣2分 | 🔴82~88扣5分")
+    lines.append(f"综合评分 = gain×0.2 + RPS综合×0.5 + 趋势×0.3（用于最终排序）" )
 
     output_text = "\n".join(lines)
     print("\n" + output_text)
