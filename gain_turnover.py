@@ -706,9 +706,9 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if not last_day_ok:
         signal_penalty += 10.0   # 末日军缩>-3%
     if below_min > max_allowed_below:
-        signal_penalty += (below_min - max_allowed_below) * 3.0   # 每多1天多扣3分
+        signal_penalty += 3.0   # 信号窗口低于min_gain天数超限
     if not np.all(signal_gains <= config.max_gain):
-        signal_penalty += 10.0   # 存在涨幅超max_gain
+        signal_penalty += 2.0   # 存在涨幅超max_gain
 
     avg_amt20 = prepared.avg_amount_20[idx]
     avg_to5 = prepared.avg_turnover_5[idx]
@@ -1061,12 +1061,11 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
             signal_penalty_d += 10.0
             reasons.append(f"信号窗口末日军缩>-3%（扣{10:.0f}分）")
         if below_min > max_allowed_below:
-            deduction = (below_min - max_allowed_below) * 3.0
-            signal_penalty_d += deduction
-            reasons.append(f"信号窗口{below_min}天<{config.min_gain}%（扣{deduction:.0f}分）")
+            signal_penalty_d += 3.0
+            reasons.append(f"信号窗口低于min_gain天数超限（扣3分）")
         if not np.all(signal_gains <= config.max_gain):
-            signal_penalty_d += 10.0
-            reasons.append(f"信号窗口存在涨幅>{config.max_gain}%%（扣10分）")
+            signal_penalty_d += 2.0
+            reasons.append(f"信号窗口存在涨幅>{config.max_gain}%%（扣2分）")
     elif config.min_gain <= 0:
         pass  # 不限制最低涨幅
 
