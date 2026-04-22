@@ -1014,7 +1014,7 @@ def _simplified_top_filter(prepared: PreparedData, idx: int) -> tuple[bool, str]
             continue
         next_offset = d - 1
         if next_offset < 0 or next_offset >= idx:
-            return True, "长上影"
+            continue  # 今日(D-0)无化解数据，跳过，继续检查昨日(D-1)
         next_o = float(prepared.open_[idx - next_offset])
         next_c = float(prepared.close[idx - next_offset])
         next_body = next_c - next_o
@@ -1164,13 +1164,13 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
         # 化解：被检验日(D日，即idx-d)的次日(D+1，即idx-d+1)阳线实体覆盖
         next_offset = d - 1    # D+1相对idx的偏移（d=0→-1=无效；d=1→0=今日；d=2→1=昨日）
         if next_offset < 0 or next_offset >= idx:
-            return True, "长上影"
+            continue  # 今日(D-0)无化解数据，跳过，继续检查昨日(D-1)
         next_o = float(prepared.open_[idx - next_offset])
         next_c = float(prepared.close[idx - next_offset])
         next_body = next_c - next_o
         if next_body > 0 and next_o <= c and next_c >= o:
             continue   # 被化解，不拒绝
-        return True, "长上影"
+        reasons.append(f"见顶风险(长上影)")
 
     return False, ""
 
