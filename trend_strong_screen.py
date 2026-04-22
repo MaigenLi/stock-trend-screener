@@ -17,6 +17,7 @@
   python select_trend_strong.py --date 2026-04-08     # 指定截止日期（复盘用）
 """
 
+import re
 import os
 import sys
 import time
@@ -419,7 +420,7 @@ def evaluate_stock(code: str,
         if names_cache is not None:
             name = get_stock_name(code, names_cache)
 
-        if exclude_st and name and ("ST" in name or "S" in name):
+        if exclude_st and name and re.search(r'S[T*]|^\*ST', name):
             return None
 
         # RSI-14
@@ -451,7 +452,8 @@ def evaluate_stock(code: str,
             rsi_penalty = 2
 
         raw = trend_score * WEIGHT_TREND + momentum_score * WEIGHT_MOMENTUM
-        total = raw / (WEIGHT_TREND + WEIGHT_MOMENTUM) - rsi_penalty
+        # 归一化：按实际满分归一（趋势满分100，动量满分110），再×100 → 0~100
+        total = raw / (WEIGHT_TREND * 100.0 + WEIGHT_MOMENTUM * 110.0) * 100.0 - rsi_penalty
 
         return {
             "code": code,
