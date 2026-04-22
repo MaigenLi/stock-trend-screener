@@ -181,10 +181,20 @@ def run(target_date=None, custom_config=None, codes=None):
     else:
         all_codes = rps.get_all_stock_codes()
 
+    # 腾讯实时批量预取（盘中，且目标日期是今天才需要）
+    import pandas as pd
+    today = pd.Timestamp.today().normalize()
+    is_today = (target_date is not None and pd.Timestamp(target_date).normalize() == today)
+    if is_today:
+        from stock_trend.gain_turnover import _prefetch_tencent_realtime as prefetch_tencent_realtime
+        prefetch_tencent_realtime(all_codes)
+
+    # 盘中实时：scan_rps 不带 target_date（避免 concat 开销），腾讯数据已在缓存
+    # 复盘模式：正常传 target_date
     df = rps.scan_rps(
         all_codes,
         top_n=len(all_codes),
-        target_date=target_date
+        target_date=None if is_today else target_date
     )
 
     df = score_stocks(df)

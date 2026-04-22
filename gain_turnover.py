@@ -17,6 +17,7 @@ import math
 import os
 import threading
 import time
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -276,6 +277,107 @@ def _cache_path(code: str, adjust: str = "qfq") -> Path:
     pure = normalize_symbol(code)
     return CACHE_DIR / f"{pure}_{adjust}.csv"
 
+
+def _fetch_tencent_realtime_today(code: str) -> Optional[pd.DataFrame]:
+    """从腾讯财经获取今日实时行情，返回兼容 .day 格式的 DataFrame（若市场未收盘或失败返回 None）。"""
+    try:
+        url = f"https://qt.gtimg.cn/q={code}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            txt = resp.read().decode("gbk", errors="replace")
+        # 格式：v_sh600036="1~name~..."，需去掉前缀
+        body = txt.split("=", 1)[1].strip('"; \n')
+        fields = body.split("~")
+        if len(fields) < 38:
+            return None
+        price = float(fields[3])
+        prev_close = float(fields[4])
+        open_ = float(fields[5])
+        vol_lots = float(fields[6])   # 手（1手=100股）
+        amount_wan = float(fields[8])  # 万元
+        amount = amount_wan * 1e4       # 元
+        # amount = vol_lots * 100 * price（验算用）
+        vol = vol_lots * 100          # 股数
+        high = float(fields[33])
+        low = float(fields[34])
+        ts = fields[30]
+        today_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+        # turnover：换手率需要流动股本，腾讯数据无此字段，留空由 AkShare 补充
+        df = pd.DataFrame([{
+            "date": pd.Timestamp(today_str),
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": price,
+            "volume": vol,
+            "amount": amount,
+            "change_pct": (price - prev_close) / prev_close * 100 if prev_close > 0 else 0.0,
+        }])
+        return df
+    except Exception as e:
+        print(f"[DEBUG _fetch_tencent] EXCEPTION: {e}")
+        import traceback; traceback.print_exc()
+        return None
+
+
+# ── 腾讯实时批量预取（供 load_qfq_history 调用）──────────────────────────────
+_tencent_batch_cache: dict[str, pd.DataFrame] = {}
+_tencent_batch_loaded = False
+
+
+def _prefetch_tencent_realtime(codes: list[str], chunk_size: int = 50) -> None:
+    """批量从腾讯获取今日行情（分块请求避免 URL过长），结果存入 _tencent_batch_cache。"""
+    global _tencent_batch_cache, _tencent_batch_loaded
+    if not codes or _tencent_batch_loaded:
+        return
+    # 分块请求，每块 50 只股票（URL 约 450 字符，安全）
+    for i in range(0, len(codes), chunk_size):
+        chunk = codes[i:i + chunk_size]
+        try:
+            url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                txt = resp.read().decode("gbk", errors="replace")
+            for line in txt.strip().split("\n"):
+                if "=" not in line:
+                    continue
+                prefix_part = line.split("=")[0]
+                code_key = prefix_part.replace("v_", "") if prefix_part.startswith("v_") else None
+                if code_key is None or not code_key.startswith(("sz", "sh")):
+                    continue
+                body = line.split("=", 1)[1].strip('"; \n')
+                fields = body.split("~")
+                if len(fields) < 38:
+                    continue
+                try:
+                    price = float(fields[3])
+                    prev_close = float(fields[4])
+                    open_ = float(fields[5])
+                    vol_lots = float(fields[6])
+                    amount_wan = float(fields[8])
+                    amount = amount_wan * 1e4
+                    vol = vol_lots * 100
+                    high = float(fields[33])
+                    low = float(fields[34])
+                    ts = fields[30]
+                    today_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+                    _tencent_batch_cache[code_key] = pd.DataFrame([{
+                        "date": pd.Timestamp(today_str),
+                        "open": open_,
+                        "high": high,
+                        "low": low,
+                        "close": price,
+                        "volume": vol,
+                        "amount": amount,
+                        "change_pct": (price - prev_close) / prev_close * 100 if prev_close > 0 else 0.0,
+                    }])
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    _tencent_batch_loaded = True
+
+
 def _fetch_ak_qfq(code: str, adjust: str = "qfq") -> pd.DataFrame:
     """优先用更稳定的 stock_zh_a_daily，失败时回退 stock_zh_a_hist。"""
     pure = normalize_symbol(code)
@@ -480,11 +582,16 @@ def load_qfq_history(
     with lock:
         use_cache = path.exists() and not refresh
         if use_cache and max_age_hours > 0:
-            #age_hours = (time.time() - path.stat().st_mtime) / 3600.0
-            #if age_hours > max_age_hours:
-            #    use_cache = False
+            # age_hours = (time.time() - path.stat().st_mtime) / 3600.0
+            # if age_hours > max_age_hours:
+            #     use_cache = False
+            # 复盘指定日期时：若缓存已包含目标日期则用缓存，否则联网拉取
             if end_date is not None:
-                use_cache = True   # 强制只用缓存
+                cached = pd.read_csv(path, parse_dates=["date"]) if path.exists() else pd.DataFrame()
+                if not cached.empty and cached["date"].max() >= pd.Timestamp(end_date):
+                    use_cache = True
+                else:
+                    use_cache = False   # 缓存不含目标日期，联网拉取
 
         if use_cache:
             try:
@@ -511,8 +618,23 @@ def load_qfq_history(
     # 确定截止时间戳
     if end_date is not None:
         end_ts = pd.Timestamp(end_date)
+        # ── 腾讯实时数据补充（盘中用）：若目标日期是今天且缓存只有昨天，尝试从腾讯获取今日数据 ──
+        today_ts = pd.Timestamp.today().normalize()
+        if end_ts == today_ts and not df.empty:
+            cache_max = df["date"].max().normalize()
+            if cache_max < today_ts:
+                # 优先用批量预取缓存，否则回退到单股补获
+                rt = _tencent_batch_cache.get(normalize_prefixed(code))
+                if rt is None or rt.empty:
+                    rt = _fetch_tencent_realtime_today(code)
+                if rt is not None and not rt.empty:
+                    rt = rt.copy()
+                    rt["date"] = pd.to_datetime(rt["date"])
+                    if rt.iloc[0]["date"] == today_ts and not df[df["date"] == today_ts].shape[0]:
+                        df = pd.concat([df, rt], ignore_index=True)
+                        df = df.sort_values("date").reset_index(drop=True)
     else:
-        # 实时模式：默认截到缓存已有最新日期（已保证无未来数据）
+        # 实时模式：默认截到缓存已有最新日期
         end_ts = pd.Timestamp(df["date"].max())
 
     # ★ 第一步：截断 end_date（防止未来数据泄漏，必须在最前面）

@@ -97,7 +97,7 @@ def step1_rps(
         (df_all["ret20_rps"] >= rps20_min)
     ].copy()
 
-    df = df.sort_values("composite", ascending=False).head(50)
+    df = df.sort_values("composite", ascending=False).head(300)
 
     print(f"   策略: RPS综合≥{rps_composite}, RPS20≥{rps20_min}（与rps_strong_screen逻辑一致）")
     print(f"✅ Step1 完成: {len(df_all)} 只扫描 → Top50 用时 {time.time()-t0:.1f}s")
