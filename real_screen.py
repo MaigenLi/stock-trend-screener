@@ -188,11 +188,15 @@ def run(target_date=None, custom_config=None, codes=None):
     )
 
     df = score_stocks(df)
+    if df.empty:
+        print("⚠️  Step1 扫描无有效股票")
+        return
     # 指定代码模式：直接取指定股票；全市场模式：取 top 60% quantile
     if codes is not None:
         top_codes = df["code"].tolist()
     else:
-        top_codes = df[df["score"] > df["score"].quantile(0.6)]["code"].tolist()
+        q = df["score"].quantile(0.6)
+        top_codes = df[df["score"] > q]["code"].tolist()
     print(f"[DEBUG] top_codes from Step1: {len(top_codes)}")
 
     print(f"Step1 → {len(top_codes)}")
