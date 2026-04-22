@@ -704,7 +704,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
     last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
     if not last_day_ok:
-        signal_penalty += 10.0   # 末日军缩>-3%
+        signal_penalty += 5.0   # 末日军缩>-3%
     if below_min > max_allowed_below:
         signal_penalty += 3.0   # 信号窗口低于min_gain天数超限
     if not np.all(signal_gains <= config.max_gain):
@@ -746,10 +746,10 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if rsi >= 82:
         return None
 
-    # ── 简化见顶过滤（3项）────────────────────────────────────────
+    # ── 简化见顶过滤（改为软扣分，不硬过滤）──────────────────────
     rejected, reject_reason = _simplified_top_filter(prepared, idx)
     if rejected:
-        return None
+        signal_penalty += 5.0   # 见顶风险扣5分
 
     # ── 线性评分模型 ─────────────────────────────────────────────
     # score = w1*trend + w4*position + bonus
@@ -1058,8 +1058,8 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
         max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
         last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
         if not last_day_ok:
-            signal_penalty_d += 10.0
-            reasons.append(f"信号窗口末日军缩>-3%（扣{10:.0f}分）")
+            signal_penalty_d += 5.0
+            reasons.append(f"信号窗口末日军缩>-3%（扣5分）")
         if below_min > max_allowed_below:
             signal_penalty_d += 3.0
             reasons.append(f"信号窗口低于min_gain天数超限（扣3分）")
@@ -1092,7 +1092,8 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
 
     rejected_top, reason_top = _simplified_top_filter(prepared, idx)
     if rejected_top:
-        reasons.append(f"见顶风险({reason_top})")
+        signal_penalty_d += 5.0
+        reasons.append(f"见顶风险({reason_top})（扣5分）")
 
     # 评分（独立计算，不修改prepared）
     gain10 = float((prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0) if idx >= 10 else 0.0
