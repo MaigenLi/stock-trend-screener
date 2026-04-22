@@ -172,7 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--quality-days", type=int, default=20, help="质量窗口天数")
     parser.add_argument("--turnover", type=float, default=1.5, help="5日平均换手率下限%%")
     parser.add_argument("--min-volume", type=float, default=1e8, help="20日平均成交额下限")
-    parser.add_argument("--score-threshold", type=float, default=35.0, help="评分门槛（默认35.0）")
+    parser.add_argument("--score-threshold", type=float, default=40.0, help="评分门槛（默认40.0）")
 
     parser.add_argument("--adjust", type=str, default="qfq", choices=["qfq", "", "hfq"], help="复权方式")
     parser.add_argument("--top-n", type=int, default=100, help="返回前N只")
