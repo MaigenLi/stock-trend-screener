@@ -444,9 +444,11 @@ def main():
         print("\n⚠️ Step1 无符合RPS策略的股票，退出")
         return
 
-    # Step 2
+    # Step 2（仅传入 Step1 Top50）
+    step1_top50 = step1_df.head(50)
+    print(f"   → 取 Step1 Top50 进入 Step2（实际 {len(step1_top50)} 只）")
     step2_df, _ = step2_trend(
-        step1_df=step1_df,
+        step1_df=step1_top50,
         top_n=0 if args.trend_top == 0 else args.trend_top,
         min_score=args.trend_score,
         max_workers=args.workers,
