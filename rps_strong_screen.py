@@ -15,6 +15,7 @@ RPS 热力图筛选器
   python rps_strong_screen.py --codes sz000967       # 指定股票
 """
 
+import re
 import sys
 import time
 from pathlib import Path
@@ -98,8 +99,8 @@ def calc_stock_rps(
         if names_cache is not None:
             name = get_stock_name(code, names_cache) or ""
 
-        # ST 过滤
-        if "ST" in name or "S" in name:
+        # ST/*ST 过滤（仅匹配风险警示股票）
+        if re.search(r'S[T\*]|^\*ST', name):
             return None
 
         # 换手率过滤（5日均，替代绝对成交额，市值相对）
@@ -130,8 +131,10 @@ def calc_stock_rps(
         if ret20 is None or ret60 is None or ret120 is None:
             return None
 
+        ret10 = _ret(10)
+
         # 10日涨幅 > 40% 过滤
-        if ret5 is not None and ret5 > 40:
+        if ret10 is not None and ret10 > 40:
             return None
 
         # RSI-14
