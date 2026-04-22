@@ -23,17 +23,14 @@ from typing import Dict, List, Optional
 
 import akshare as ak
 
-
 def _disp_w(s: str) -> int:
     """计算字符串的显示宽度 (ASCII=1, CJK=2)."""
     return sum(2 if (ord(c) >> 11) else 1 for c in s)
-
 
 def _rpad(s: str, width: int) -> str:
     """左对齐，按显示宽度补足宽度 (for text columns)."""
     d = _disp_w(s)
     return s + " " * max(0, width - d)
-
 
 def _lpad(s: str, width: int) -> str:
     """右对齐，按显示宽度补足宽度 (for numeric columns)."""
@@ -54,7 +51,6 @@ SECTOR_CACHE_DIR = WORKSPACE / ".cache" / "sector"
 SECTOR_MAP_FILE = SECTOR_CACHE_DIR / "stock_sector_map.json"
 SECTOR_TOP_FILE  = SECTOR_CACHE_DIR / "top_sectors.json"
 SECTOR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
 
 def _fetch_sina_sectors() -> tuple[list[dict], list[dict]]:
     """从新浪获取所有行业板块及涨跌幅，返回 (top_list, bottom_list)。"""
@@ -86,7 +82,6 @@ def _fetch_sina_sectors() -> tuple[list[dict], list[dict]]:
         print(f"⚠️ 新浪板块获取失败: {e}")
         return [], []
 
-
 def get_top_sectors(n: int = 15, use_cache: bool = True) -> set[str]:
     """
     获取今日热门板块（涨跌幅前N名），返回板块名称集合。
@@ -108,7 +103,6 @@ def get_top_sectors(n: int = 15, use_cache: bool = True) -> set[str]:
     )
     return top_names
 
-
 def get_stock_sector_map() -> dict[str, str]:
     """
     加载股票→板块映射表（从缓存文件），不存在则返回空dict。
@@ -121,7 +115,6 @@ def get_stock_sector_map() -> dict[str, str]:
     except Exception:
         return {}
 
-
 def save_stock_sector_map(mapping: dict[str, str]):
     """保存股票→板块映射表到缓存文件。"""
     try:
@@ -130,7 +123,6 @@ def save_stock_sector_map(mapping: dict[str, str]):
         SECTOR_MAP_FILE.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         print(f"⚠️ 板块映射缓存保存失败: {e}")
-
 
 def fetch_stock_sector_from_sina(code: str) -> str | None:
     """
@@ -161,7 +153,6 @@ def fetch_stock_sector_from_sina(code: str) -> str | None:
     except Exception:
         return None
 
-
 def resolve_stock_sector(code: str, cache: dict[str, str]) -> tuple[str | None, dict[str, str]]:
     """
     获取股票所属板块（优先用缓存，否则尝试查询Sina）。
@@ -178,10 +169,8 @@ def resolve_stock_sector(code: str, cache: dict[str, str]) -> tuple[str | None, 
         return sector, new_cache
     return None, cache
 
-
 _CACHE_LOCKS: dict[str, threading.Lock] = {}
 _CACHE_LOCKS_GUARD = threading.Lock()
-
 
 @dataclass
 class StrategyConfig:
@@ -191,7 +180,7 @@ class StrategyConfig:
     quality_days: int = 20
     min_turnover: float = 1.5
     min_amount: float = 1e8
-    score_threshold: float = 60.0
+    score_threshold: float = 40.0
     adjust: str = "qfq"
     max_extension_pct: float = 16.0
     min_history_days: int = 90
@@ -201,7 +190,8 @@ class StrategyConfig:
     sector_bonus_pts: float = 8.0      # 热门板块加分分值
     check_volume_surge: bool = False  # 是否检查质量窗口内明显放量（默认关闭）
     volume_surge_ratio: float = 1.8  # 放量倍数阈值（默认1.8倍）
-
+    cross_rps_days: int = 20          # 截面RPS计算周期（默认20日）
+    use_cross_rps: bool = True       # 是否启用截面RPS加分（默认开启）
 
 @dataclass
 class FundamentalData:
@@ -215,11 +205,9 @@ class FundamentalData:
     pe: float           # 市盈率（动态，可能为nan）
     report_date: str     # 最新报告日期
 
-
 # ── 基本面扣分常量 ───────────────────────────────────
 FUNDAMENTAL_PENALTY_LOSS = 10     # 亏损（EPS<0）扣10分
 FUNDAMENTAL_PENALTY_NEGATIVE_PE = 10  # PE为负（亏损股）扣10分
-
 
 def get_lock(key: str) -> threading.Lock:
     with _CACHE_LOCKS_GUARD:
@@ -227,13 +215,11 @@ def get_lock(key: str) -> threading.Lock:
             _CACHE_LOCKS[key] = threading.Lock()
         return _CACHE_LOCKS[key]
 
-
 def normalize_symbol(code: str) -> str:
     code = str(code).strip().lower()
     if code.startswith(("sh", "sz", "bj")):
         return code[-6:]
     return code
-
 
 def normalize_prefixed(code: str) -> str:
     code = str(code).strip().lower()
@@ -248,7 +234,6 @@ def normalize_prefixed(code: str) -> str:
             return f"bj{code}"
     return code
 
-
 def get_all_stock_codes() -> List[str]:
     if not STOCK_CODES_FILE.exists():
         raise FileNotFoundError(f"股票代码文件不存在: {STOCK_CODES_FILE}")
@@ -260,7 +245,6 @@ def get_all_stock_codes() -> List[str]:
                 continue
             codes.append(normalize_prefixed(line))
     return list(dict.fromkeys(codes))
-
 
 def load_stock_names() -> Dict[str, str]:
     names: Dict[str, str] = {}
@@ -282,7 +266,6 @@ def load_stock_names() -> Dict[str, str]:
         pass
     return names
 
-
 def get_stock_name(code: str, names_cache: Dict[str, str]) -> str:
     c = normalize_prefixed(code).lower()
     if c in names_cache:
@@ -290,12 +273,10 @@ def get_stock_name(code: str, names_cache: Dict[str, str]) -> str:
     pure = c[-6:]
     return names_cache.get(pure, "未知")
 
-
 def _cache_path(code: str, adjust: str = "qfq") -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     pure = normalize_symbol(code)
     return CACHE_DIR / f"{pure}_{adjust}.csv"
-
 
 def _fetch_ak_qfq(code: str, adjust: str = "qfq") -> pd.DataFrame:
     """优先用更稳定的 stock_zh_a_daily，失败时回退 stock_zh_a_hist。"""
@@ -390,12 +371,10 @@ def _fetch_ak_qfq(code: str, adjust: str = "qfq") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-
 def _fundamental_cache_path(code: str) -> Path:
     """基本面缓存路径（JSON，每季度更新一次）。"""
     pure = normalize_symbol(code)
     return FUNDAMENTAL_CACHE_DIR / f"{pure}.json"
-
 
 def _fetch_fundamental(code: str) -> Optional[FundamentalData]:
     """
@@ -459,7 +438,6 @@ def _fetch_fundamental(code: str) -> Optional[FundamentalData]:
             time.sleep(0.3)
     return None
 
-
 def load_fundamental_data(code: str, refresh: bool = False) -> Optional[FundamentalData]:
     """
     加载基本面数据（缓存优先，过期时间设为90天）。
@@ -485,7 +463,6 @@ def load_fundamental_data(code: str, refresh: bool = False) -> Optional[Fundamen
     return data
 
 
-
 def load_qfq_history(
     code: str,
     start_date: Optional[str | pd.Timestamp] = None,
@@ -505,9 +482,11 @@ def load_qfq_history(
     with lock:
         use_cache = path.exists() and not refresh
         if use_cache and max_age_hours > 0:
-            age_hours = (time.time() - path.stat().st_mtime) / 3600.0
-            if age_hours > max_age_hours:
-                use_cache = False
+            #age_hours = (time.time() - path.stat().st_mtime) / 3600.0
+            #if age_hours > max_age_hours:
+            #    use_cache = False
+            if end_date is not None:
+                use_cache = True   # 强制只用缓存
 
         if use_cache:
             try:
@@ -560,13 +539,11 @@ def load_qfq_history(
 
     return df.sort_values("date").reset_index(drop=True)
 
-
 def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
     out = np.full(len(arr), np.nan, dtype=float)
     if len(arr) >= window:
         out[window - 1:] = np.convolve(arr, np.ones(window) / window, mode="valid")
     return out
-
 
 def compute_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     close = np.asarray(close, dtype=float)
@@ -592,7 +569,6 @@ def compute_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
         out[i + 1] = 100.0 - 100.0 / (1.0 + rs)
     return out
 
-
 @dataclass
 class PreparedData:
     df: pd.DataFrame
@@ -616,7 +592,6 @@ class PreparedData:
     avg_turnover_20: np.ndarray
     rsi14: np.ndarray
 
-
 @dataclass
 class SignalResult:
     code: str
@@ -635,22 +610,12 @@ class SignalResult:
     extension_pct: float
     subscores: Dict[str, float]
     details: Dict[str, float | int | str]
-    fundamental_penalty: int = 0
-    fundamental_eps: Optional[float] = None
-    fundamental_roe: Optional[float] = None
-    fundamental_is_profitable: Optional[bool] = None
-    fundamental_report_date: Optional[str] = None
     sector_name: Optional[str] = None
     sector_bonus_applied: float = 0.0
     limit_up_bonus: float = 0.0
-    top_risk_penalty: float = 0.0    # 见顶风险扣分（P0）
-    top_risk_reason: str = ""         # 见顶风险原因
-    rsi_tier: str = ""   # 🟢低位/🟡健康/🔴高位/高位热/❌超买
-    rsi_momentum: float = 0.0   # RSI今日 - RSI昨日（RSI动量）
-    rsi_momentum_score: float = 0.0  # RSI动量得分
-    volume_accel: float = 0.0   # 今日量 / 昨日量（量能加速度）
-    volume_accel_score: float = 0.0  # 量能加速度得分
-
+    rsi_tier: str = "🟢健康"
+    cross_rps: float = 50.0          # 截面RPS（0~100，候选股范围内排名）
+    cross_rps_bonus: float = 0.0     # 截面RPS加分（0~10）
 
 def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
     if df is None or df.empty or len(df) < 80:
@@ -715,11 +680,11 @@ def prepare_data(df: pd.DataFrame) -> Optional[PreparedData]:
         rsi14=rsi14,
     )
 
-
 def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
                   code: Optional[str] = None, fundamental: Optional[FundamentalData] = None,
                   top_sectors: Optional[set[str]] = None,
-                  stock_sector_map: Optional[dict[str, str]] = None) -> Optional[dict]:
+                  stock_sector_map: Optional[dict[str, str]] = None,
+                  cross_rps: Optional[dict[str, float]] = None) -> Optional[dict]:
     min_idx = max(config.signal_days + 1, config.quality_days, 60, config.min_history_days)
     if idx < min_idx:
         return None
@@ -750,7 +715,11 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
 
     # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
     # 但最后一个交易日必须满足 > -3%（允许小幅回调但不超过 -3%）
-    below_min = (signal_gains < config.min_gain).sum()
+    # min_gain <= 0 时：完全跳过最低涨幅检查（视为"不限制"）
+    if config.min_gain <= 0:
+        below_min = 0
+    else:
+        below_min = (signal_gains < config.min_gain).sum()
     max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
     last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
     if not (last_day_ok and below_min <= max_allowed_below and np.all(signal_gains <= config.max_gain)):
@@ -786,296 +755,92 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     amount_ratio_5_20 = prepared.avg_amount_5[idx] / avg_amt20 if avg_amt20 > 0 and not np.isnan(prepared.avg_amount_5[idx]) else 1.0
     gain10 = (prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0
 
-    # 强制趋势过滤，升级版核心约束
-    # ma5 >= ma10（允许0.5%容差），ma5和ma10均上涨; ma20位置不限
+    # 强制趋势过滤（仅保留核心约束）
     if not (close > ma5 >= ma10 * 0.995):
-        return None
-    if ma5 <= ma5_prev or ma10 <= ma10_prev:
-        return None
-    if gain10 <= 0:
-        return None
-    # max_extension 动态化为 signal_days * max_gain
-    dynamic_max_ext = config.signal_days * config.max_gain
-    if extension_pct > dynamic_max_ext:
         return None
     if rsi >= 82:
         return None
 
-    # ── P0: 见顶风险过滤（6项见顶信号 + RECOVER 化解）─────────────
-    top_risk_penalty, top_risk_reason = check_top_risk(prepared, idx)
+    # ── 简化见顶过滤（3项）────────────────────────────────────────
+    rejected, reject_reason = _simplified_top_filter(prepared, idx)
+    if rejected:
+        return None
 
-    # 评分系统（总分100）
-    score = 0.0
+    # ── 线性评分模型 ─────────────────────────────────────────────
+    # score = w1*trend + w4*position + bonus
+    # 权重：w1=1.0(趋势) w4=1.0(位置)，动量/量能仅作展示不参与评分
+    # 满分100（趋势0~1.5 + 位置0~5，归一到100分）
     subscores: Dict[str, float] = {}
 
-    # 1) 信号稳定性 20
-    gain_std = float(np.std(signal_gains, ddof=0))
-    stability = max(0.0, min(20.0, 20.0 - gain_std * 5.0))
-    subscores["stability"] = round(stability, 2)
-    score += stability
+    # 维度1: 趋势 (trend) - 1.0*(MA20>MA60) + 0.5*(MA5>MA10)，满分1.5
+    ma20_val = float(prepared.ma20[idx])
+    ma60_val = float(prepared.ma60[idx]) if not np.isnan(prepared.ma60[idx]) else 0.0
+    ma20_above_ma60 = 1.0 if (ma20_val > ma60_val > 0) else 0.0
+    ma5_above_ma10 = 0.5 if (ma5 > ma10) else 0.0
+    trend = ma20_above_ma60 + ma5_above_ma10   # 0~1.5
 
-    # 2) 信号强度 10, 越靠近区间中值越好，避免太弱/太热
-    mid = (config.min_gain + config.max_gain) / 2.0
-    mean_gain = float(np.mean(signal_gains))
-    strength = max(0.0, 10.0 - abs(mean_gain - mid) * 3.0)
-    subscores["signal_strength"] = round(strength, 2)
-    score += strength
+    # 维度2: 动量 (momentum) - 10日收益率，用tanh归一化（~0~100，仅展示）
+    momentum = float(np.tanh(gain10 / 20.0) * 100.0)  # ~0~100
 
-    # 3) 趋势质量 25
-    trend = 0.0
-    trend += 10.0  # close > ma5 > ma10 已过滤
-    # ── 上升形态加分 ─────────────────────────────────
-    # MA5 持续上涨
-    ma5_5d_ago = prepared.ma5[idx - 5]
-    if not np.isnan(ma5_5d_ago) and ma5 > ma5_5d_ago * 1.01:   # 5日内上涨 >1%
-        trend += 3.0
-    elif not np.isnan(ma5_5d_ago) and ma5 > ma5_5d_ago:
-        trend += 1.5
-    # MA10 持续上涨
-    ma10_5d_ago = prepared.ma10[idx - 5]
-    if not np.isnan(ma10_5d_ago) and ma10 > ma10_5d_ago * 1.01:  # 5日内上涨 >1%
-        trend += 3.0
-    elif not np.isnan(ma10_5d_ago) and ma10 > ma10_5d_ago:
-        trend += 1.5
-    # MA20 加速上涨
-    ma20_10d_ago = prepared.ma20[idx - 10]
-    if not np.isnan(ma20_10d_ago) and ma20 > ma20_10d_ago * 1.02:  # 10日内上涨 >2%
-        trend += 4.0
-    elif not np.isnan(ma20_10d_ago) and ma20 > ma20_10d_ago:
-        trend += 2.0
-    # MA60 向上拐点（从下跌转为上涨）
-    ma60_10d_ago = prepared.ma60[idx - 10]
-    ma60_5d_ago = prepared.ma60[idx - 5]
-    if not np.isnan(ma60_10d_ago) and not np.isnan(ma60_5d_ago):
-        if ma60 > ma60_5d_ago > ma60_10d_ago:   # MA60 加速向上
-            trend += 3.0
-        elif ma60 > ma60_10d_ago:               # MA60 整体向上
-            trend += 1.5
-    # 20日涨幅趋势
-    if gain20 >= 5:
-        trend += 5.0
-    elif gain20 > 0:
-        trend += 3.0
-    # 偏离MA20适中（不过度偏离）
-    if 0 <= extension_pct <= 8:
-        trend += 3.0
-    subscores["trend"] = round(min(trend, 40.0), 2)   # 上限40
-    score += trend
-
-    # 4) 成交活跃度 15
-    liquidity = 0.0
-    if avg_amt20 >= config.min_amount * 2:
-        liquidity += 8.0
-    elif avg_amt20 >= config.min_amount:
-        liquidity += 5.0
-    if config.min_turnover <= 0:
-        liquidity += 7.0
+    # 维度3: 量能 (vol_ratio) - 当日换手/5日均换手，<1=缩量 >1=放量（仅展示）
+    to_today = float(prepared.true_turnover[idx]) if not np.isnan(prepared.true_turnover[idx]) else 0.0
+    to_ma5 = float(prepared.avg_turnover_5[idx]) if not np.isnan(prepared.avg_turnover_5[idx]) else 0.0
+    if to_ma5 > 0:
+        vol_ratio = to_today / to_ma5   # 1.0=正常, >1.5=放量, <0.5=缩量
     else:
-        if avg_to5 >= config.min_turnover * 1.5:
-            liquidity += 7.0
-        elif avg_to5 >= config.min_turnover:
-            liquidity += 5.0
-    subscores["liquidity"] = round(liquidity, 2)
-    score += liquidity
+        vol_ratio = 1.0
+    vol_score = float(np.tanh((vol_ratio - 1.0) * 2.0) * 50.0 + 50.0)  # ~0~100
 
-    # 5) 量能配合 15
-    volume_quality = 0.0
-    if 0.9 <= amount_ratio_5_20 <= 2.5:
-        volume_quality += 8.0
-    elif 0.7 <= amount_ratio_5_20 <= 3.5:
-        volume_quality += 5.0
-    q_start = idx - config.quality_days + 1
-    up_mask = quality_gains > 0
-    down_mask = ~up_mask
-    recent_amount = prepared.amount[q_start: idx + 1]
-    if up_mask.any() and down_mask.any():
-        up_amt = float(np.nanmean(recent_amount[up_mask]))
-        down_amt = float(np.nanmean(recent_amount[down_mask]))
-        if up_amt > down_amt * 1.15:
-            volume_quality += 7.0
-        elif up_amt > down_amt:
-            volume_quality += 4.0
-    else:
-        volume_quality += 5.0
-    subscores["volume_quality"] = round(volume_quality, 2)
-    score += volume_quality
-
-    # 6) K线质量 5
-    candle_quality = 0.0
-    opens = prepared.open_[idx - config.signal_days + 1: idx + 1]
-    highs = prepared.high[idx - config.signal_days + 1: idx + 1]
-    lows = prepared.low[idx - config.signal_days + 1: idx + 1]
-    closes = prepared.close[idx - config.signal_days + 1: idx + 1]
-    body = np.abs(closes - opens)
-    full_range = np.maximum(highs - lows, 1e-6)
-    upper_shadow = np.maximum(highs - np.maximum(opens, closes), 0)
-    body_ratio = float(np.nanmean(body / full_range))
-    upper_ratio = float(np.nanmean(upper_shadow / full_range))
-    candle_quality += min(3.0, body_ratio * 6.0)
-    candle_quality += max(0.0, min(2.0, 2.0 - upper_ratio * 5.0))
-    subscores["candle_quality"] = round(candle_quality, 2)
-    score += candle_quality
-
-    # ── P1: 形态质量加分 ─────────────────────────────────────────
-    form_bonus = 0.0
-
-    # CONSIST: 10日内 ≥ 7天收盘在 MA10 上方（稳定性）
-    n_consist = min(config.signal_days, 10)
-    if n_consist >= 7 and idx >= n_consist:
-        c_arr = prepared.close[idx - n_consist + 1: idx + 1]
-        ma10_arr = prepared.ma10[idx - n_consist + 1: idx + 1]
-        above_ma10 = int(np.sum(c_arr > ma10_arr))
-        if above_ma10 >= 7:
-            form_bonus += 5.0
-            subscores["consist_pass"] = True
+    # 维度4: 位置 (position) - 60日区间位置，越低越安全 (0=底部, 100=高位)，满分5
+    if idx >= 60:
+        low_60 = float(np.nanmin(prepared.low[idx-60:idx]))
+        high_60 = float(np.nanmax(prepared.high[idx-60:idx]))
+        range_60 = high_60 - low_60
+        if range_60 > 0:
+            position = (close - low_60) / range_60 * 100.0   # 0=低点, 100=高点
         else:
-            subscores["consist_pass"] = False
+            position = 50.0
     else:
-        subscores["consist_pass"] = False
+        position = 50.0
+    position_score = max(100.0 - position * 0.5, 0.0)   # 越低分越高（position=0→100分, 100→50分, 150→25分）
 
-    # F_HL: 低点抬升（近5日低点 > 前5日低点 > 再前5日低点）
-    if idx >= 15:
-        low_0_4  = float(np.nanmin(prepared.low[idx - 4: idx + 1]))
-        low_5_9  = float(np.nanmin(prepared.low[idx - 9: idx - 4]))
-        low_10_14 = float(np.nanmin(prepared.low[idx - 14: idx - 9]))
-        if low_0_4 > low_5_9 > low_10_14:
-            form_bonus += 5.0
-            subscores["f_hl_pass"] = True
-        else:
-            subscores["f_hl_pass"] = False
-    else:
-        subscores["f_hl_pass"] = False
+    # 线性加权（仅趋势+位置，换手率只做过滤条件）
+    W1, W4 = 1.0, 1.0
+    score = W1 * trend + W4 * (position_score / 100.0 * 5.0)
+    # 换算为百分制（满分100）
+    score = round(score / (W1 + W4) * 20.0, 2)  # → 0~100
 
-    # F_BP: 平台突破（近15日振幅 < 15%，放量突破前高，量 > MA20量 × 1.3）
-    if idx >= 16:
-        close_15 = prepared.close[idx - 15: idx]
-        range_15 = (float(np.nanmax(close_15)) - float(np.nanmin(close_15))) / float(np.nanmax(close_15)) * 100.0
-        high_15 = float(np.nanmax(close_15))
-        ma20_amt_today = float(prepared.avg_amount_20[idx]) if not np.isnan(prepared.avg_amount_20[idx]) else 0.0
-        ma20_amt_prior = float(prepared.avg_amount_20[idx - 1]) if not np.isnan(prepared.avg_amount_20[idx - 1]) else ma20_amt_today
-        vol_3d = float(np.nanmean(prepared.volume[idx - 2: idx + 1]))
-        today_vol = float(prepared.volume[idx])
-        avg_vol = max(vol_3d, today_vol)
-        if range_15 < 15.0 and close > high_15 and ma20_amt_prior > 0 and avg_vol >= ma20_amt_prior * 1.3:
-            form_bonus += 5.0
-            subscores["f_bp_pass"] = True
-        else:
-            subscores["f_bp_pass"] = False
-    else:
-        subscores["f_bp_pass"] = False
+    subscores["trend"] = round(trend, 3)
+    subscores["momentum"] = round(momentum, 2)
+    subscores["vol_score"] = round(vol_score, 2)
+    subscores["position"] = round(position, 2)
+    subscores["position_score"] = round(position_score, 2)
 
-    subscores["form_bonus"] = form_bonus
-    score += form_bonus
+    # 截面RPS加分（0~10）
+    cross_rps_bonus = 0.0
+    if config.use_cross_rps and cross_rps and code:
+        c = normalize_prefixed(code)
+        rps_val = cross_rps.get(c, 50.0)
+        cross_rps_bonus = round(rps_val / 100.0 * 10.0, 2)
+        score = round(score + cross_rps_bonus, 2)
+        subscores["cross_rps"] = rps_val
+        subscores["cross_rps_bonus"] = cross_rps_bonus
 
-    # 7) RSI/不过热 10
-    rsi_score = 0.0
-    if 45 <= rsi <= 72:
-        rsi_score = 10.0
-    elif 38 <= rsi < 45:
-        rsi_score = 7.0
-    elif 72 < rsi <= 78:
-        rsi_score = 6.0
-    elif 78 < rsi < 82:
-        rsi_score = 2.0
-    subscores["rsi_health"] = round(rsi_score, 2)
-    score += rsi_score
-
-    # ── RSI 分层扣分（tiered penalty）────────────────────────────────
-    # RSI 45~65: 健康，上涨持续性好 → 不扣分
-    # RSI 65~72: 偏强 → 扣5分
-    # RSI 72~75: 高位区 → 扣10分
-    # RSI 75~78: 过热预警 → 扣15分
-    # RSI 78~82: 过热 → 扣25分（但不强排除，因为趋势延续性强）
-    # RSI > 82: 超买 → calc 已有过滤，这里不会到
-    rsi_tier = ""
-    if rsi < 50:
-        rsi_tier = "🔵低位"
-    elif 50 <= rsi <= 65:
-        rsi_tier = "🟢健康"
-    elif 65 < rsi <= 72:
-        rsi_tier = "🟡偏强"
-        score -= 5
-    elif 72 < rsi <= 75:
-        rsi_tier = "🔴高位"
-        score -= 10
-    elif 75 < rsi <= 78:
-        rsi_tier = "高位热"
-        score -= 15
-    elif 78 < rsi <= 82:
-        rsi_tier = "高位热"
-        score -= 25
-    else:
-        rsi_tier = "❌超买"
-    # Store tier penalty value for subscores record
-    tier_penalty_map = {"🟡偏强": -5.0, "🔴高位": -10.0, "高位热": -25.0, "❌超买": -40.0}
-    subscores["rsi_tier_penalty"] = tier_penalty_map.get(rsi_tier, 0.0)
-
-    # ── RSI 动量加分（加速上涨中的股继续涨）───────────────────────
-    # RSI动量 = RSI今日 - RSI昨日
-    # RSI动量 > +5: 加速中 → +5分
-    # RSI动量 > +8: 强烈加速 → +10分
-    # RSI动量 < -5: 开始回落 → 扣5分
-    rsi_momentum_score = 0.0
-    if rsi_momentum > 8:
-        rsi_momentum_score = 10.0
-    elif rsi_momentum > 5:
-        rsi_momentum_score = 5.0
-    elif rsi_momentum < -5:
-        rsi_momentum_score = -5.0
-    subscores["rsi_momentum"] = round(rsi_momentum, 2)
-    subscores["rsi_momentum_score"] = round(rsi_momentum_score, 2)
-    score += rsi_momentum_score
-
-    # ── 量能加速度（连续放量 = 主力参与）─────────────────────────
-    # vol_accel = 今日成交量 / 昨日成交量
-    vol_today = float(prepared.volume[idx]) if idx >= 0 else 1.0
-    vol_yesterday = float(prepared.volume[idx-1]) if idx >= 1 else vol_today
-    vol_accel = vol_today / vol_yesterday if vol_yesterday > 0 else 1.0
-    volume_accel_score = 0.0
-    if vol_accel >= 2.0:
-        volume_accel_score = 8.0   # 今日量是昨日2倍以上，强力放量
-    elif vol_accel >= 1.5:
-        volume_accel_score = 5.0   # 明显放量
-    elif vol_accel >= 1.2:
-        volume_accel_score = 2.0   #温和放量
-    subscores["volume_accel"] = round(vol_accel, 2)
-    subscores["volume_accel_score"] = round(volume_accel_score, 2)
-    score += volume_accel_score
-
-    # ── 近10日涨停加分 ─────────────────────────────────
-    # 涨停阈值：前复权数据中单日涨幅 >= 9.5%（留0.5%容差）
-    recent_gains = prepared.gains[idx - 9: idx + 1]   # 最近10个交易日（含今日）
+    # 近10日涨停加分（+10）
+    recent_gains = prepared.gains[idx - 9: idx + 1]
     limit_up_bonus = 0.0
     if len(recent_gains) >= 10 and (~np.isnan(recent_gains)).sum() >= 10:
         if np.any(recent_gains >= 9.5):
-            limit_up_bonus = 10.0
-            score += limit_up_bonus
-
-    # ── 基本面扣分（亏损 / PE为负）──────────────────────
-    fundamental_penalty = 0
-    if config.check_fundamental and fundamental is not None:
-        if not fundamental.is_profitable:
-            fundamental_penalty = FUNDAMENTAL_PENALTY_LOSS
-        score -= fundamental_penalty
-
-    # ── 热门板块加分 ────────────────────────────────────
-    sector_name = None
-    sector_bonus_applied = 0.0
-    if config.sector_bonus and top_sectors and code and stock_sector_map:
-        c = normalize_prefixed(code)
-        sector_name = stock_sector_map.get(c)
-        if sector_name and sector_name in top_sectors:
-            sector_bonus_applied = config.sector_bonus_pts
-            score += sector_bonus_applied
-
-    # ── 见顶风险扣分 ─────────────────────────────────────────────
-    if top_risk_penalty < 0:
-        score += top_risk_penalty   # e.g. -30（6项全触发）
-        subscores["top_risk_penalty"] = top_risk_penalty
-        subscores["top_risk_reason"] = top_risk_reason
+            limit_up_bonus = 3.0
+            score = round(score + limit_up_bonus, 2)
 
     if score < config.score_threshold:
         return None
+
+    # Compute stats for details (linear model removed these variables)
+    mean_gain = float(np.mean(signal_gains))
+    gain_std = float(np.std(signal_gains, ddof=0))
+    amount_ratio_5_20_val = float(prepared.avg_amount_5[idx] / avg_amt20) if avg_amt20 > 0 and not np.isnan(prepared.avg_amount_5[idx]) else 1.0
 
     details = {
         "mean_gain_signal": round(mean_gain, 3),
@@ -1085,7 +850,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "avg_amount_20": round(avg_amt20 / 1e8, 2),
         "avg_turnover_5": round(float(avg_to5), 2) if not np.isnan(avg_to5) else None,
         "avg_turnover_20": round(float(avg_to20), 2) if not np.isnan(avg_to20) else None,
-        "amount_ratio_5_20": round(float(amount_ratio_5_20), 2),
+        "amount_ratio_5_20": round(amount_ratio_5_20_val, 2),
         "extension_pct": round(extension_pct, 2),
         "rsi14": round(float(rsi), 2),
     }
@@ -1105,28 +870,17 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "ma20": round(float(ma20), 2),
         "ma60": round(float(ma60), 2),
         "extension_pct": round(float(extension_pct), 2),
-        "fundamental_penalty": fundamental_penalty,
-        "fundamental_eps": round(fundamental.eps, 3) if fundamental is not None else None,
-        "fundamental_roe": round(fundamental.roe, 2) if fundamental is not None else None,
-        "fundamental_is_profitable": fundamental.is_profitable if fundamental is not None else None,
-        "fundamental_report_date": fundamental.report_date if fundamental is not None else None,
-        "sector_name": sector_name,
-        "sector_bonus_applied": sector_bonus_applied,
+        "sector_name": None,
+        "sector_bonus_applied": 0.0,
         "limit_up_bonus": limit_up_bonus,
-        "top_risk_penalty": subscores.get("top_risk_penalty", 0.0),
-        "top_risk_reason": subscores.get("top_risk_reason", "无见顶信号"),
-        "rsi_tier": rsi_tier,
-        "rsi_momentum": round(rsi_momentum, 2),
-        "rsi_momentum_score": round(rsi_momentum_score, 2),
-        "volume_accel": round(vol_accel, 2),
-        "volume_accel_score": round(volume_accel_score, 2),
+        "rsi_tier": "🟢健康",
     }
-
 
 def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: StrategyConfig,
                          fundamental: Optional[FundamentalData] = None,
                          top_sectors: Optional[set[str]] = None,
-                         stock_sector_map: Optional[dict[str, str]] = None) -> Optional[SignalResult]:
+                         stock_sector_map: Optional[dict[str, str]] = None,
+                         cross_rps: Optional[dict[str, float]] = None) -> Optional[SignalResult]:
     prepared = prepare_data(df)
     if prepared is None:
         return None
@@ -1135,7 +889,8 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         fundamental = load_fundamental_data(code)
     idx = len(prepared.df) - 1
     result = evaluate_signal(prepared, idx, config, code=code, fundamental=fundamental,
-                             top_sectors=top_sectors, stock_sector_map=stock_sector_map)
+                             top_sectors=top_sectors, stock_sector_map=stock_sector_map,
+                             cross_rps=cross_rps)
     if result is None:
         return None
     return SignalResult(
@@ -1155,23 +910,14 @@ def evaluate_latest_signal(code: str, name: str, df: pd.DataFrame, config: Strat
         extension_pct=result["extension_pct"],
         subscores=result["subscores"],
         details=result["details"],
-        fundamental_penalty=result["fundamental_penalty"],
-        fundamental_eps=result["fundamental_eps"],
-        fundamental_roe=result["fundamental_roe"],
-        fundamental_is_profitable=result["fundamental_is_profitable"],
-        fundamental_report_date=result["fundamental_report_date"],
         sector_name=result.get("sector_name"),
         sector_bonus_applied=result.get("sector_bonus_applied", 0.0),
         limit_up_bonus=result.get("limit_up_bonus", 0.0),
-        top_risk_penalty=result.get("top_risk_penalty", 0.0),
-        top_risk_reason=result.get("top_risk_reason", ""),
         rsi_tier=result.get("rsi_tier", "🟢健康"),
-        rsi_momentum=result.get("rsi_momentum", 0.0),
-        rsi_momentum_score=result.get("rsi_momentum_score", 0.0),
-        volume_accel=result.get("volume_accel", 0.0),
-        volume_accel_score=result.get("volume_accel_score", 0.0),
-    )
 
+        cross_rps=result.get("subscores", {}).get("cross_rps", 50.0),
+        cross_rps_bonus=result.get("subscores", {}).get("cross_rps_bonus", 0.0),
+    )
 
 def format_signal_results(results: List[SignalResult], title: str) -> str:
     lines = []
@@ -1190,14 +936,11 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
         name = r.name or ""
         code = r.code or ""
         signal_date = r.signal_date or ""
-        eps_str = f"{r.fundamental_eps:.3f}" if r.fundamental_eps is not None else "-"
-        roe_str = f"{r.fundamental_roe:.2f}" if r.fundamental_roe is not None else "-"
-        profit_str = "✓" if r.fundamental_is_profitable else ("✗" if r.fundamental_is_profitable is False else "-")
-        # 扣分列：基本面扣分 或 板块加分
+        # 扣分列
         if r.sector_bonus_applied > 0:
             penalty_str = f"+{int(r.sector_bonus_applied)}({r.sector_name})"
-        elif r.fundamental_penalty:
-            penalty_str = f"-{r.fundamental_penalty}"
+        elif r.limit_up_bonus > 0:
+            penalty_str = f"+{int(r.limit_up_bonus)}(涨停)"
         else:
             penalty_str = "-"
         # 附加信息：板块加分 或 涨停加分
@@ -1224,23 +967,11 @@ def format_signal_results(results: List[SignalResult], title: str) -> str:
     bonus_note = (" + " + " + ".join(bonus_parts)) if bonus_parts else ""
     lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10{bonus_note}")
     # 基本面详情（亏损股摘要）
-    loss_stocks = [r for r in results if r.fundamental_penalty > 0]
-    if loss_stocks:
-        lines.append(f"\n⚠️  亏损/微利股（已扣分，共 {len(loss_stocks)} 只）：")
-        lines.append(f"{'代码':<10}\t{'名称':<8}\t{'报告期':<12}\t{'EPS(元)':>8}\t{'ROE%%':>7}\t{'扣分':>5}")
-        for r in loss_stocks:
-            lines.append(
-                f"{r.code:<10}\t{r.name:<8}\t"
-                f"{(r.fundamental_report_date or '-'):<12}\t"
-                f"{(r.fundamental_eps if r.fundamental_eps is not None else 0):>8.3f}\t"
-                f"{(r.fundamental_roe if r.fundamental_roe is not None else 0):>7.2f}\t"
-                f"{r.fundamental_penalty:>5}"
-            )
     return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# P0: 见顶风险过滤（6项见顶信号 + RECOVER 化解机制）
+# 简化见顶过滤（3项核心）（6项见顶信号 + RECOVER 化解机制）
 # ─────────────────────────────────────────────────────────────────────────────
 def _compute_macd(closes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """返回 (dif, dea, macd)，用标准参数 EMA(12,26,9)。"""
@@ -1251,157 +982,99 @@ def _compute_macd(closes: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
     macd = (dif - dea) * 2.0   # 柱状图
     return dif, dea, macd
 
-
 def _ema(series: np.ndarray, n: int) -> np.ndarray:
     """指数移动平均，pandas风格。"""
     import pandas as pd
     s = pd.Series(series)
     return s.ewm(span=n, adjust=False).mean().to_numpy()
 
-
-def check_top_risk(prepared: PreparedData, idx: int) -> tuple[float, str]:
+def _simplified_top_filter(prepared: PreparedData, idx: int) -> tuple[bool, str]:
     """
-    检查6项见顶风险信号，返回 (penalty, reason)。
-    penalty < 0 表示有风险；reason 描述风险内容。
-    如果满足 RECOVER 条件（强势反包），penalty = 0。
+    简化见顶过滤（仅3项）：
+    - 放量大阴：跌幅>5% 且 量>MA5量×1.5（5日内）
+    - MACD高位死叉：DIF在零轴上方下穿DEA（5日内）
+    - 长上影线：上影>=实体×2 且 上影>股价×1% 且 振幅>2%（3日内）
+    返回 (rejected, reason)。
     """
-    PENALTY_PER_SIGNAL = -10.0   # 每个信号扣分
-    MAX_LOOKBACK = 20            # 最大回溯天数
+    if idx < 5:
+        return False, ""
+    # ── 放量大阴（当日跌幅>5% 且 量>MA5×1.5）────────────────────
+    curr_close = float(prepared.close[idx])
+    prev_close = float(prepared.close[idx - 1]) if idx >= 1 else curr_close
+    vol_curr = float(prepared.volume[idx])
+    vol_ma5 = float(np.nanmean(prepared.volume[max(0, idx - 5):idx])) if idx >= 5 else float(np.nanmean(prepared.volume[:idx]))
+    if prev_close > 0:
+        drop_pct = (prev_close - curr_close) / prev_close * 100.0   # 正数=下跌
+        if drop_pct > 5.0 and vol_curr > vol_ma5 * 1.5:
+            return True, "放量大阴"
 
-    lookback = min(idx, MAX_LOOKBACK)
-    if lookback < 5:
-        return 0.0, ""
-
-    close_arr = prepared.close[idx - lookback: idx + 1]
-    open_arr  = prepared.open_[idx - lookback: idx + 1]
-    high_arr  = prepared.high[idx - lookback: idx + 1]
-    low_arr   = prepared.low[idx - lookback: idx + 1]
-    vol_arr   = prepared.volume[idx - lookback: idx + 1]
-
-    today_close = float(close_arr[-1])
-    today_open  = float(open_arr[-1])
-    today_vol   = float(vol_arr[-1])
-    today_gain  = float(prepared.gains[idx]) if not np.isnan(prepared.gains[idx]) else 0.0
-
-    # 基础指标
-    ma5_vol  = float(np.nanmean(vol_arr[-6:-1]))   # 前5日均量（不含今日）
-    ma5_vol_y = float(np.nanmean(vol_arr[-6:-1]))  # 同上（用于昨日5日均量）
-    vol_arr_for_ma5 = vol_arr[:-1]  # 排除今日
-    ma5_vol_calc = float(np.nanmean(vol_arr_for_ma5[-5:])) if len(vol_arr_for_ma5) >= 5 else today_vol
-    ma5_vol_y_calc = float(np.nanmean(vol_arr_for_ma5[-6:-1])) if len(vol_arr_for_ma5) >= 6 else ma5_vol_calc
-
-    # 今日换手
-    today_to = float(prepared.true_turnover[idx]) if not np.isnan(prepared.true_turnover[idx]) else 0.0
-
-    # RECOVER 条件：涨幅>3% AND 收盘>MA20 AND 量>MA5均量
-    ma20_today = float(prepared.ma20[idx]) if not np.isnan(prepared.ma20[idx]) else 0.0
-    ma5_vol_today_ref = float(np.nanmean(vol_arr[-6:-1]))  # 前5日均量（含昨）
-    recover = (today_gain > 3.0) and (today_close > ma20_today > 0) and (today_vol > ma5_vol_today_ref)
-
-    total_penalty = 0.0
-    reasons = []
-
-    # ── 信号3: 缩量新高（3日内）────────────────────────────────
-    # 股价 >= 20日最高 × 0.98 AND 量 < 10日均量 × 0.6
-    lookback3 = min(lookback, 3)
-    bl_found = False
-    for d in range(lookback3):
-        c = float(close_arr[d])   # d=0 是最早天，d=lookback-1 是今天
-        h20 = float(np.nanmax(close_arr[d:min(d+20, len(close_arr))]))
-        vol_ma10 = float(np.nanmean(vol_arr[d:min(d+10, len(vol_arr))]))
-        if c >= h20 * 0.98 and vol_ma10 > 0 and float(vol_arr[d]) < vol_ma10 * 0.6:
-            bl_found = True
-            break
-    if bl_found:
-        total_penalty += PENALTY_PER_SIGNAL
-        reasons.append("缩量新高")
-
-    # ── 信号4: 高位放量大阴线（5日内）──────────────────────────
-    # 跌幅 > 5% AND 量 > 昨日5日均量 × 1.5
-    lookback5 = min(lookback, 5)
-    dayin_found = False
-    for d in range(lookback5):
-        if d == 0:
-            continue
-        prev_close = float(close_arr[d - 1])
-        curr_close = float(close_arr[d])
-        if prev_close <= 0:
-            continue
-        drop_pct = (prev_close - curr_close) / prev_close * 100.0
-        vol_prev_ma5 = float(np.nanmean(vol_arr[max(0,d-5):d])) if d >= 5 else float(np.nanmean(vol_arr[:d])) if d > 0 else today_vol
-        if drop_pct > 5.0 and float(vol_arr[d]) > vol_prev_ma5 * 1.5:
-            dayin_found = True
-            break
-    if dayin_found:
-        total_penalty += PENALTY_PER_SIGNAL
-        reasons.append("放量大阴")
-
-    # ── 信号5: 高位连续阴线（5日内阴线>=3天）───────────────────
-    # NO_LY: SUM(CLOSE<OPEN, 5) < 3（即阴线<3天才安全，等价于≥3则风险）
-    lookback5 = min(lookback, 5)
-    close_arr_5 = close_arr[-lookback5:] if lookback5 > 0 else close_arr
-    open_arr_5  = open_arr[-lookback5:] if lookback5 > 0 else open_arr
-    red_days = int(np.sum(close_arr_5 < open_arr_5))
-    if red_days >= 3:
-        total_penalty += PENALTY_PER_SIGNAL
-        reasons.append(f"连阴{red_days}天")
-
-    # ── 信号6: MACD高位死叉（5日内，DIF在零轴上方死叉）──────────
-    lookback5 = min(lookback, 5)
-    if lookback5 >= 2:
-        macd_close = prepared.close[idx - lookback5: idx + 1]
+    # ── MACD高位死叉（5日内）──────────────────────────────────
+    if idx >= 22:
+        macd_close = prepared.close[idx - 22: idx + 1]
         if len(macd_close) >= 27:
             dif, dea, _ = _compute_macd(macd_close)
-            macd_found = False
             for d in range(1, len(dif)):
-                # DIF 从上方（前一周期>0）下穿 DEA（当前<0）
-                if dif[d-1] > 0 and dif[d] < dea[d]:
-                    macd_found = True
-                    break
-            if macd_found:
-                total_penalty += PENALTY_PER_SIGNAL
-                reasons.append("MACD高位死叉")
+                if dif[d] < dea[d] and dif[d-1] >= dea[d-1]:
+                    return True, "MACD高位死叉"
 
-    # ── 信号①: 放量滞涨（5日内）────────────────────────────────
-    # 量是前5日均量2倍以上 AND 涨幅 < 1%
-    lookback5 = min(lookback, 5)
-    zz_found = False
-    for d in range(lookback5):
-        if d == 0:
-            continue
-        vol_ma5_prior = float(np.nanmean(vol_arr[max(0,d-5):d])) if d >= 5 else float(np.nanmean(vol_arr[:d])) if d > 0 else today_vol
-        gain_d = float(prepared.gains[idx - lookback5 + d]) if not np.isnan(prepared.gains[idx - lookback5 + d]) else 0.0
-        if vol_ma5_prior > 0 and float(vol_arr[d]) >= vol_ma5_prior * 2.0 and gain_d < 1.0:
-            zz_found = True
-            break
-    if zz_found:
-        total_penalty += PENALTY_PER_SIGNAL
-        reasons.append("放量滞涨")
-
-    # ── 信号②: 长上影线（3日内）────────────────────────────────
-    # 上影 >= 实体×2 AND 上影 > 股价×1% AND 振幅 > 2%
-    lookback3 = min(lookback, 3)
-    yx_found = False
-    for d in range(lookback3):
-        o = float(open_arr[d]); c = float(close_arr[d])
-        h = float(high_arr[d]); l = float(low_arr[d])
+    # ── 长上影线（3日内）+ 化解：次日阳线实体覆盖 ──────────────
+    for d in range(min(3, idx + 1)):
+        o = float(prepared.open_[idx - d])
+        c = float(prepared.close[idx - d])
+        h = float(prepared.high[idx - d])
+        lo = float(prepared.low[idx - d])
+        today_close = float(prepared.close[idx])
         body = abs(c - o)
         upper_shadow = max(h - max(o, c), 0)
-        full_range = max(h - l, 1e-6)
-        if (body > 0 and upper_shadow >= body * 2.0
+        full_range = max(h - lo, 1e-6)
+        if not (body > 0 and upper_shadow >= body * 2.0
                 and upper_shadow > today_close * 0.01
                 and full_range / today_close * 100.0 > 2.0):
-            yx_found = True
-            break
-    if yx_found:
-        total_penalty += PENALTY_PER_SIGNAL
-        reasons.append("长上影")
+            continue
 
-    reason_str = "; ".join(reasons) if reasons else "无见顶信号"
+        # 化解：被检验日(D日，即idx-d)的次日(D+1，即idx-d+1)阳线实体覆盖
+        next_offset = d - 1    # D+1相对idx的偏移（d=0→-1=无效；d=1→0=今日；d=2→1=昨日）
+        if next_offset < 0 or next_offset >= idx:
+            return True, "长上影"
+        next_o = float(prepared.open_[idx - next_offset])
+        next_c = float(prepared.close[idx - next_offset])
+        next_body = next_c - next_o
+        if next_body > 0 and next_o <= c and next_c >= o:
+            continue   # 被化解，不拒绝
+        return True, "长上影"
 
-    # RECOVER: 强势反包化解所有风险
-    if recover and total_penalty < 0:
-        total_penalty = 0.0
-        reason_str = "RECOVER化解"
+    return False, ""
 
-    return total_penalty, reason_str
+
+def _compute_cross_sectional_rps(
+    prepared_data: dict[str, tuple[PreparedData, int]],
+    days: int = 20,
+) -> dict[str, float]:
+    """
+    对候选股票按过去 N 日收益率排名，返回每只股票的截面 RPS（0~100）。
+    prepared_data: {code: (prepared_obj, latest_idx)}
+    """
+    if len(prepared_data) < 2:
+        return {code: 50.0 for code in prepared_data}
+
+    # 计算每只股票的 N 日收益率
+    returns: dict[str, float] = {}
+    for code, (prep, idx) in prepared_data.items():
+        if idx < days:
+            returns[code] = -999.0
+        else:
+            curr = float(prep.close[idx])
+            past = float(prep.close[idx - days])
+            if past > 0:
+                returns[code] = (curr / past - 1.0) * 100.0
+            else:
+                returns[code] = -999.0
+
+    # 排序（升序）：收益最低 → RPS=0，收益最高 → RPS=100
+    sorted_codes = sorted(returns.keys(), key=lambda c: returns[c])
+    n = len(sorted_codes)
+    rps_dict: dict[str, float] = {}
+    for rank, code in enumerate(sorted_codes):
+        rps_dict[code] = round((rank / max(n - 1, 1)) * 100.0, 2)
+
+    return rps_dict

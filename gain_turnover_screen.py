@@ -91,20 +91,53 @@ def screen_market(
         f"评分门槛={config.score_threshold}"
     )
 
-    def work(code: str):
-        code = normalize_prefixed(code)
-        df = load_qfq_history(code, end_date=end_date, adjust=config.adjust, refresh=refresh_cache)
+    # ── 截面RPS预计算（全市场横向比较）────────────────────────────
+    # 先串行加载所有候选股数据，计算截面收益率排名
+    from gain_turnover import prepare_data, _compute_cross_sectional_rps
+    prepared_data: dict = {}
+    print(f"   📊 截面RPS预计算（{total}只）...")
+    t0_preload = time.time()
+    for code in codes:
+        c = normalize_prefixed(code)
+        df = load_qfq_history(c, end_date=end_date, adjust=config.adjust, refresh=refresh_cache)
         if df is None or df.empty:
-            return None
+            continue
         if target_date is not None:
             df = df[df["date"] <= pd.Timestamp(target_date.date())].reset_index(drop=True)
         if df.empty:
-            return None
-        # 板块加分：传入热门板块集合和已有映射，evaluate_signal 内部按需解析
+            continue
+        prep = prepare_data(df)
+        if prep is None:
+            continue
+        idx = len(prep.dates) - 1
+        prepared_data[c] = (prep, idx)
+    cross_rps = {}
+    if config.use_cross_rps and len(prepared_data) >= 2:
+        cross_rps = _compute_cross_sectional_rps(prepared_data, days=config.cross_rps_days)
+        rps_vals = list(cross_rps.values())
+        print(f"   截面RPS: min={min(rps_vals):.0f} max={max(rps_vals):.0f} median={sorted(rps_vals)[len(rps_vals)//2]:.0f}（耗时 {time.time()-t0_preload:.1f}s）")
+    print(f"   ✅ 数据预加载完成: {len(prepared_data)}/{total} 只（耗时 {time.time()-t0_preload:.1f}s）")
+
+    def work(code: str):
+        c = normalize_prefixed(code)
+        if c not in prepared_data:
+            df = load_qfq_history(c, end_date=end_date, adjust=config.adjust, refresh=refresh_cache)
+            if df is None or df.empty:
+                return None
+            if target_date is not None:
+                df = df[df["date"] <= pd.Timestamp(target_date.date())].reset_index(drop=True)
+            if df.empty:
+                return None
+        else:
+            # 复用预加载的数据
+            prep, _ = prepared_data[c]
+            df = prep.df
+        crps = cross_rps.get(c) if config.use_cross_rps else None
         return evaluate_latest_signal(
-            code, get_stock_name(code, names), df, config,
+            c, get_stock_name(c, names), df, config,
             top_sectors=top_sectors if config.sector_bonus else None,
             stock_sector_map=stock_sector_map if config.sector_bonus else None,
+            cross_rps={c: crps} if crps is not None else None,
         )
 
     done = 0
@@ -139,7 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--quality-days", type=int, default=20, help="质量窗口天数")
     parser.add_argument("--turnover", type=float, default=1.5, help="5日平均换手率下限%%")
     parser.add_argument("--min-volume", type=float, default=1e8, help="20日平均成交额下限")
-    parser.add_argument("--score-threshold", type=float, default=60.0, help="评分门槛")
+    parser.add_argument("--score-threshold", type=float, default=35.0, help="评分门槛（默认35.0）")
 
     parser.add_argument("--adjust", type=str, default="qfq", choices=["qfq", "", "hfq"], help="复权方式")
     parser.add_argument("--top-n", type=int, default=100, help="返回前N只")

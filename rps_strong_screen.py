@@ -120,6 +120,13 @@ def calc_stock_rps(
         ret5 = _ret(5)
         ret3 = _ret(3)
 
+        # 3日收盘都在MA5上方（蓄势确认）
+        ma5_series = close.rolling(5).mean()
+        ma5_3day_above = all(
+            float(close.iloc[-(d)]) > float(ma5_series.iloc[-(d)])
+            for d in [1, 2, 3]
+        ) if len(close) >= 6 else False
+
         if ret20 is None or ret60 is None or ret120 is None:
             return None
 
@@ -155,6 +162,7 @@ def calc_stock_rps(
             "ret3": round(ret3, 2) if ret3 else 0.0,
             "rsi": round(rsi_val, 1),
             "avg_turnover_5": round(avg_turnover_5, 2),  # %
+            "ma5_3day_above": ma5_3day_above,
             "data_date": actual_last,
         }
 

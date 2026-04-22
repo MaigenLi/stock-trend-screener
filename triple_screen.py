@@ -3,27 +3,13 @@
 """
 三步量化选股系统（整合版）
 ==========================
-Step 1: rps_strong_screen  →  RPS强势蓄势股（适合介入）
-Step 2: trend_strong_screen →  趋势验证（均线健康）
-Step 3: gain_turnover_screen → 精准入场点
+Step1: 综合RPS≥75，RSI 50~80，20日涨幅≤50%
+Step2: trend 验证趋势，确认均线多头
+Step3: gain_turnover 信号窗口启动（信号分仅含趋势+位置）
 
-策略设计：
-  Step1: 综合RPS≥80，RSI 40~82（健康区间，非超买），20日涨幅≤40%
-         → 选出"市场里强，但还没暴涨"的蓄势股
-  Step2: trend 验证趋势，确认均线多头
-  Step3: gain_turnover 信号窗口启动
+综合评分：gain×0.5 + RPS综×0.1 + 趋势×0.5
 
 输出：~/stock_reports/triple_screen_YYYY-MM-DD.txt
-      （与 gain_turnover_screen.py 保持一致）
-
-用法：
-  python triple_screen.py                           # 默认全市场
-  python triple_screen.py --date 2026-04-15        # 复盘
-  python triple_screen.py --codes sz000678         # 指定股票
-  python triple_screen.py --rps-composite 85       # 调RPS门槛
-  python triple_screen.py --gain-days 3           # 调信号窗口
-  python triple_screen.py --check-fundamental      # 加基本面检查
-  python triple_screen.py --check-volume-surge     # 加放量检查
 """
 
 import sys
@@ -41,13 +27,12 @@ sys.path.insert(0, str(WORKSPACE))
 from stock_trend import gain_turnover as gt
 from stock_trend import trend_strong_screen as tss
 from stock_trend import rps_strong_screen as rps
-
-# ── 默认参数 ─────────────────────────────────────────────
+from gain_turnover import _rpad, _lpad, normalize_prefixed
 DEFAULT_RPS_COMPOSITE = 75.0   # Step1: RPS综合分门槛
 DEFAULT_RSI_LOW = 50.0         # Step1: RSI下限（须在均线上方，下跌趋势排除）
-DEFAULT_RSI_HIGH = 80.0        # Step1: RSI上限（>82才超买排除，75~82高位区扣分）
+DEFAULT_RSI_HIGH = 82.0        # Step1: RSI上限（>82超买，>82扣5分，>75扣2分）
 DEFAULT_RPS20_MIN = 75.0       # Step1: RPS20门槛（近期强势）
-DEFAULT_MAX_RET20 = 40.0       # Step1: 20日涨幅上限（避开暴涨）
+DEFAULT_MAX_RET20 = 50.0       # Step1: 20日涨幅上限（避开暴涨）
 DEFAULT_MAX_RET5 = 30.0        # Step1: 近5日涨幅上限（近期过速上涨则排除）
 DEFAULT_RET3_MIN = 3.0         # Step1: 近3日涨幅下限（剔除横盘，等于窗口加速确认）
 DEFAULT_MIN_TURNOVER_STEP1 = 2.0  # Step1: 5日均换手率下限（%%，市值相对）
@@ -58,6 +43,7 @@ DEFAULT_GAIN_MIN = 2.0
 DEFAULT_GAIN_MAX = 10.0
 DEFAULT_QUALITY_DAYS = 20
 DEFAULT_WORKERS = 8
+DEFAULT_MARKET_STOP_LOSS = -5.0  # 市场21日涨幅低于此值则跳过
 
 
 # ─────────────────────────────────────────────────────────
@@ -98,9 +84,10 @@ def step1_rps(
         if before_count != after_count:
             print(f"   ⚠️  排除当日无数据股票: {before_count - after_count} 只（缓存最新日期 < {target_str}），剩余 {after_count} 只")
 
-    # 若指定了 codes，则只保留指定范围
+    # 若指定了 codes，则只保留指定范围（规范化前缀）
     if codes is not None:
-        codes_lower = {c.lower() for c in codes}
+        codes_normalized = [normalize_prefixed(c) for c in codes]
+        codes_lower = {c.lower() for c in codes_normalized}
         df_all = df_all[df_all["code"].str.lower().isin(codes_lower)]
         print(f"   限定范围: {len(codes)} 只（其余用于排名计算）")
 
@@ -113,7 +100,8 @@ def step1_rps(
         (df_all["ret20"] <= max_ret20) &
         (df_all["ret20"] >= -10) &
         (df_all["ret5"] <= max_ret5) &
-        (df_all["ret3"] >= ret3_min) &
+        ((df_all["ret3"] >= ret3_min) |  # 正常：3日涨幅≥3%
+         (df_all["ma5_3day_above"] & (df_all["ret3"] >= 2.0))) &
         (df_all["avg_turnover_5"] >= min_turnover)
     ].copy()
 
@@ -212,6 +200,8 @@ def step3_gain(
     sector_bonus: bool,
     check_volume_surge: bool,
     max_workers: int,
+    min_turnover: float = 2.0,
+    score_threshold: float = 40.0,
 ) -> list:
     t0 = time.time()
     codes = step2_df["code"].str.lower().tolist()
@@ -226,6 +216,8 @@ def step3_gain(
         check_fundamental=check_fundamental,
         sector_bonus=sector_bonus,
         check_volume_surge=check_volume_surge,
+        min_turnover=min_turnover,
+        score_threshold=score_threshold,
     )
 
     from stock_trend.gain_turnover_screen import screen_market
@@ -243,96 +235,13 @@ def step3_gain(
 
 
 # ─────────────────────────────────────────────────────────
-# 连续命中计数
-# ─────────────────────────────────────────────────────────
-def load_consecutive_counts(target_date: datetime | None) -> tuple[dict[str, int], dict[str, int]]:
-    """
-    读取上一个交易日 triple_screen 输出，返回两个 dict：
-      (code → 连号次数, code → RSI连档天数)
-    如果今天出现在上交易日输出里 → 今天 = 上交易日次数 + 1
-    RSI连档 = 上交易日连档 + 1（如果昨天的RSI在高位区>72）；否则 = 0
-    自动处理周一（找上周五）的情况。
-    """
-    reports_dir = Path.home() / "stock_reports"
-    today = target_date or datetime.now()
-    today_str = today.strftime("%Y-%m-%d")
-
-    candidates = []
-    for p in reports_dir.glob("triple_screen_*.txt"):
-        if p.name != f"triple_screen_{today_str}.txt":
-            candidates.append(p)
-
-    if not candidates:
-        return {}, {}
-
-    # 从文件名日期中提取实际交易日期（不用 mtime，所有文件今天生成的 mtime 相同）
-    import re
-    date_pat = re.compile(r"(\d{4}-\d{2}-\d{2})")
-    prev_file = None
-    prev_date: datetime | None = None
-    for p in candidates:
-        m = date_pat.search(p.name)
-        if not m:
-            continue
-        try:
-            file_date = datetime.strptime(m.group(1), "%Y-%m-%d")
-        except ValueError:
-            continue
-        if file_date.date() >= today.date():
-            continue
-        if prev_date is None or file_date > prev_date:
-            prev_date = file_date
-            prev_file = p
-
-    if not prev_file:
-        return {}, {}
-
-    # Parse consecutive counts from prev_file
-    code_pat = re.compile(r"^(sh|sz|bj)(\d{6})$")
-    consec_pat = re.compile(r"连号[:：]?(\d+)")
-    rsi_pat = re.compile(r"连档[:：]?(\d+)")
-
-    consec_counts: dict[str, int] = {}
-    rsi_high_counts: dict[str, int] = {}
-
-    for line in prev_file.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split()
-        if len(parts) < 2:
-            continue
-        m = code_pat.match(parts[0].lower())
-        if not m:
-            continue
-        code = f"{m.group(1)}{m.group(2)}"
-
-        # 连号
-        last = parts[-1]
-        mc = consec_pat.search(last)
-        if mc:
-            consec_counts[code] = int(mc.group(1))
-        else:
-            try:
-                consec_counts[code] = int(last)
-            except ValueError:
-                consec_counts[code] = 0
-
-        # RSI 连档（在倒数第二列或特定列找 "连档:N"）
-        rsi_high_counts[code] = 0
-        for p in reversed(parts):
-            mr = rsi_pat.search(p)
-            if mr:
-                rsi_high_counts[code] = int(mr.group(1))
-                break
-
-    return consec_counts, rsi_high_counts
-
 
 # ─────────────────────────────────────────────────────────
-# 打印最终结果 + 保存（与 gain_turnover_screen 格式完全一致）
+# 打印最终结果 + 保存
 # ─────────────────────────────────────────────────────────
-from gain_turnover import _rpad, _lpad
-
 def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFrame,
-                   output_path: Path | None, target_date: datetime | None):
+                   output_path: Path | None, target_date: datetime | None, section: str = "",
+                   write_mode: str = "w"):
     """打印并保存最终结果，格式与 gain_turnover_screen.py 的 format_signal_results 完全一致"""
     if not results:
         print("\n⚠️ 最终无交集股票（三步筛选均通过）")
@@ -342,11 +251,9 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
     rps_dict = {row["code"].lower(): row for _, row in step1_all.iterrows()}
     trend_dict = {row["code"].lower(): row for _, row in step2_df.iterrows()}
 
-    # 读取昨天连号和RSI连档，今天 = 昨天 + 1；昨天没有的 = 0
-    yesterday_consec, yesterday_rsi_high = load_consecutive_counts(target_date)
-
     date_str = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
-    title = f"三步量化选股 {date_str}"
+    section_tag = f"🚀 {section} " if section else "📊 三步量化选股 "
+    title = f"{section_tag}{date_str}"
 
     lines = []
     lines.append("=" * 160)
@@ -359,25 +266,20 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
         f"\t{_lpad('总分',6)}\t{_lpad('窗口涨幅',9)}"
         f"\t{_lpad('RPS综合',8)}\t{_lpad('趋势',6)}"
         f"\t{_lpad('5日换手%',10)}"
-        f"\t{_lpad('RSI',6)}\t{_rpad('风险',8)}\t{_rpad('RSI动量',8)}\t{_rpad('量加速',8)}"
+        f"\t{_lpad('RSI',6)}\t{_rpad('风险',8)}"
         f"\t{_lpad('偏离MA20',9)}"
-        f"\t{_lpad('收盘',7)}\t{_lpad('扣分',8)}\t{_lpad('连号',5)}\t{_lpad('连档',5)}"
+        f"\t{_lpad('收盘',7)}\t{_lpad('加分',8)}"
     )
     lines.append(col_spec)
     lines.append("-" * 160)
 
-    # 按综合评分排序：gain×0.4 + RPS综合×0.3 + trend×0.3
-    # 连号≥3天 → 趋势疲劳降权20%
+    # 按综合评分排序：gain×0.5 + RPS综合×0.1 + trend×0.5
     def composite_score(r):
         info = rps_dict.get(r.code.lower(), {})
         t_info = trend_dict.get(r.code.lower(), {})
         rps_c = info.get("composite", 0.0)
         trend_s = t_info.get("total_score", 0.0)
-        prev_c = yesterday_consec.get(r.code.lower(), 0)
-        # 昨天有连续（>0）→ +1；昨天为0（首次入选）→ 输出0（还不是连号）
-        consec_today = prev_c + 1 if prev_c > 0 else 0
-        fatigue_penalty = 0.8 if consec_today >= 3 else 1.0
-        return (r.score * 0.4 + rps_c * 0.3 + trend_s * 0.3) * fatigue_penalty
+        return r.score * 0.5 + rps_c * 0.1 + trend_s * 0.5
 
     results = sorted(results, key=composite_score, reverse=True)
 
@@ -394,33 +296,16 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
         t_info = trend_dict.get(code.lower(), {})
         trend_score = t_info.get("total_score", 0.0)
 
-        # 扣分列
-        if r.sector_bonus_applied > 0:
-            penalty_str = f"+{int(r.sector_bonus_applied)}({r.sector_name})"
-        elif r.fundamental_penalty:
-            penalty_str = f"-{r.fundamental_penalty}"
-        else:
-            penalty_str = "-"
+        # 加分列
         extras = []
         if r.sector_bonus_applied > 0:
             extras.append(f"+{int(r.sector_bonus_applied)}({r.sector_name})")
         if r.limit_up_bonus > 0:
             extras.append(f"+{int(r.limit_up_bonus)}涨停")
-        if extras:
-            penalty_str = " ".join(extras)
-
-        prev_c = yesterday_consec.get(code.lower(), 0)
-        # 昨天有连续（>0）→ +1；昨天为0（首次入选）→ 输出0（还不是连号）
-        consec_today = prev_c + 1 if prev_c > 0 else 0
-
-        # RSI 连档：昨天也在高位区(>72) → +1；否则 → 0
-        # RSI 高位区：> 72
-        rsi_val = r.rsi14
-        is_high_rsi = rsi_val > 72
-        prev_rsi_high = yesterday_rsi_high.get(code.lower(), 0)
-        rsi_high_today = (prev_rsi_high + 1 if is_high_rsi and code.lower() in yesterday_rsi_high else (1 if is_high_rsi else 0))
+        bonus_str = " ".join(extras) if extras else "-"
 
         # RSI 风险等级
+        rsi_val = r.rsi14
         risk_tier = getattr(r, 'rsi_tier', '') or ''
         if not risk_tier:
             if rsi_val < 50:
@@ -432,9 +317,9 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
             elif rsi_val <= 75:
                 risk_tier = "🔴高位"
             elif rsi_val <= 78:
-                risk_tier = "高位热"
+                risk_tier = "🔴高位热"
             elif rsi_val <= 82:
-                risk_tier = "高位热"
+                risk_tier = "🔴强弩"
             else:
                 risk_tier = "❌超买"
 
@@ -444,10 +329,8 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
             f"\t{_lpad(f'{rps_c:.1f}',8)}\t{_lpad(f'{trend_score:.1f}',6)}"
             f"\t{_lpad(f'{r.avg_turnover_5:.2f}%',10)}"
             f"\t{_lpad(f'{r.rsi14:.1f}',6)}\t{_rpad(risk_tier,8)}"
-            f"\t{_rpad(f'{getattr(r, 'rsi_momentum', 0):+.1f}',8)}"
-            f"\t{_rpad(f'x{getattr(r, "volume_accel", 0):.2f}',8)}"
             f"\t{_lpad(f'{r.extension_pct:+.2f}%',9)}"
-            f"\t{_lpad(f'{r.close:.2f}',7)}\t{_lpad(penalty_str,8)}\t{_lpad(str(consec_today),5)}\t{_lpad(str(rsi_high_today),5)}"
+            f"\t{_lpad(f'{r.close:.2f}',7)}\t{_lpad(bonus_str,8)}"
         )
         lines.append(row)
 
@@ -458,24 +341,23 @@ def save_and_print(results: list, step1_all: pd.DataFrame, step2_df: pd.DataFram
     if any(r.sector_bonus_applied > 0 for r in results):
         bonus_parts.append("热门板块+8")
     if any(r.limit_up_bonus > 0 for r in results):
-        bonus_parts.append("近10日涨停+10")
+        bonus_parts.append("近10日涨停+3")
     bonus_note = (" + " + " + ".join(bonus_parts)) if bonus_parts else ""
-    lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10 + RSI动量 + 量能加速度{bonus_note}")
-    lines.append(f"RSI分层: 🟡偏强65~72扣5分 | 🔴高位72~75扣10分 | 高位热75~82扣15~25分")
-    lines.append(f"RSI动量: >+5得5分 | >+8得10分 | <-5扣5分")
-    lines.append(f"量加速: x≥1.2得2分 | x≥1.5得5分 | x≥2.0得8分")
-    lines.append(f"连号≥3天 → 综合评分×0.8（趋势疲劳降权）")
-    lines.append(f"综合评分 = gain×0.4 + RPS综合×0.3 + 趋势×0.3（用于最终排序）" )
+    lines.append(f"评分: 稳定性20 + 信号强度10 + 趋势25 + 流动性15 + 量能15 + K线5 + RSI10{bonus_note}")
+    lines.append(f"RSI分层(Step2扣分): 🟡>75扣2分 | 🔴>82扣5分")
+    lines.append(f"综合评分 = gain×0.5 + RPS综合×0.1 + 趋势×0.5（用于最终排序）" )
 
     output_text = "\n".join(lines)
     print("\n" + output_text)
 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
+        mode = write_mode
+        with open(output_path, mode, encoding="utf-8") as f:
             f.write(output_text)
             f.write("\n")
-        print(f"\n💾 结果已写入: {output_path.resolve()}")
+        if write_mode == "w":
+            print(f"\n💾 结果已写入: {output_path.resolve()}")
 
 
 # ─────────────────────────────────────────────────────────
@@ -504,7 +386,11 @@ def main():
     parser.add_argument("--date", type=str, default=None, help="截止日期 YYYY-MM-DD（复盘用）")
     parser.add_argument("--check-fundamental", action="store_true", help="开启基本面检查（亏损扣分）")
     parser.add_argument("--sector-bonus", action="store_true", help="开启热门板块加分")
-    parser.add_argument("--check-volume-surge", action="store_true", help="开启放量检查")
+    parser.add_argument("--no-check-volume-surge", dest="check_volume_surge", action="store_false", help="关闭放量检查（默认开启）")
+    parser.add_argument("--check-volume-surge", dest="check_volume_surge", action="store_true", default=True, help="开启放量检查（默认开启）")
+    parser.add_argument("--min-turnover-step3", type=float, default=2.0, help="Step3 5日均换手率下限/%%（默认2.0）")
+    parser.add_argument("--score-threshold-step3", type=float, default=40.0, help="Step3 评分门槛（默认40.0）")
+    parser.add_argument("--market-stop-loss", type=float, default=DEFAULT_MARKET_STOP_LOSS, help=f"市场止损（%%，默认{DEFAULT_MARKET_STOP_LOSS}）")
     args = parser.parse_args()
 
     target_date = None
@@ -526,6 +412,14 @@ def main():
     if args.check_volume_surge:
         print(f"#        + 放量检查")
     print(f"{'#'*60}")
+
+    # 市场止损检查
+    from stock_trend.trend_strong_screen import get_market_gain, INDEX_CODES
+    market = get_market_gain(INDEX_CODES, days=21, target_date=target_date)
+    if market < args.market_stop_loss:
+        print(f"❌ 市场21日涨幅{market:.2f}% < 止损线{args.market_stop_loss}%，停止选股")
+        return
+    print(f"📈 市场21日涨幅: {market:.2f}%")
 
     # Step 1
     step1_df, step1_all = step1_rps(
@@ -571,13 +465,20 @@ def main():
         sector_bonus=args.sector_bonus,
         check_volume_surge=args.check_volume_surge,
         max_workers=args.workers,
+        min_turnover=args.min_turnover_step3,
+        score_threshold=args.score_threshold_step3,
     )
 
     # 输出（路径与 gain_turnover_screen 保持一致）
     date_str = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
     output_path = Path.home() / "stock_reports" / f"triple_screen_{date_str}.txt"
 
-    save_and_print(results, step1_all, step2_df, output_path, target_date)
+    # 分类：启动型 vs 趋势跟随型
+    startup = [r for r in results if r.total_gain_window > 10 and r.avg_turnover_5 > 3]
+    trend_follow = [r for r in results if r.total_gain_window <= 10 or r.avg_turnover_5 <= 3]
+
+    save_and_print(startup, step1_all, step2_df, output_path, target_date, section="启动型", write_mode="w")
+    save_and_print(trend_follow, step1_all, step2_df, output_path, target_date, section="趋势型", write_mode="a")
 
     print(f"\n⏱️  总耗时: {time.time()-total_t0:.1f}s")
 

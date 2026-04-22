@@ -262,30 +262,32 @@ def parse_screen_output(path: Path) -> list[tuple[str, str, str, float]]:
     results = []
     date_pat = re.compile(r"^(\d{4}-\d{2}-\d{2})$")
     code_pat = re.compile(r"^(sh|sz|bj)(\d{6})$")
+    TAB = chr(9)
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split()
-        if len(parts) < 14:
+    txt = path.read_text(encoding="utf-8")
+    for line in txt.splitlines():
+        parts = line.split(TAB)
+        if len(parts) < 15:
             continue
-        m_code = code_pat.match(parts[0].lower())
-        if not m_code:
+        p0 = parts[0].strip()
+        m = code_pat.match(p0.lower())
+        if not m:
             continue
-        code = f"{m_code.group(1)}{m_code.group(2)}"
-        name = parts[1]
-        if not date_pat.match(parts[2]):
+        p2 = parts[2].strip()
+        if not date_pat.match(p2):
             continue
-        sig_date = parts[2]
         try:
-            sig_close = float(parts[13])
+            sig_close = float(parts[11].strip())
             if sig_close <= 0:
                 continue
         except ValueError:
             continue
+        code = f"{m.group(1)}{m.group(2)}"
+        name = parts[1].strip()
+        sig_date = p2
         results.append((code, name, sig_date, sig_close))
     return results
 
-
-# ── 核心验证（单日）────────────────────────────────────────
 def _calc_score(ret_actual: float, hit_5pct: bool, stop_loss: bool, open_gap: float) -> float:
     score = 50.0
     if ret_actual >= 6.0:
@@ -710,7 +712,7 @@ def format_multi_report(
             _fixw(f"{t2_h:+.2f}", 9),
             _fixw(t2_3, 3),
             _fixw(t2_5, 3),
-            _fixw(f"{t2.holding_score:.1f}", 7),  # T+2评基于持有期收益
+            _fixw(f"{t2.holding_score if t2 else 0:.1f}", 7),  # T+2评基于持有期收益
             _fixw(f"{r.combined_score:.1f}", 7),
             _fixw(r.combined_tag, 8),
         ]

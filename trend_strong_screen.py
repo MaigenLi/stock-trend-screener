@@ -173,8 +173,6 @@ WEIGHT_VOLUME = 0.20    # 量价因子 20%
 
 # ── RSI 参数 ──────────────────────────────────────────────
 RSI_PERIOD = 14
-RSI_PENALTY_75 = 20   # RSI 75~82 扣20分
-RSI_PENALTY_82 = 40   # RSI 82~88 扣40分
 RSI_FILTER = 88        # RSI>88 直接过滤
 
 # ── 相对强弱参数 ──────────────────────────────────────────
@@ -445,18 +443,15 @@ def evaluate_stock(code: str,
         vol_score, vol_factors = score_vol_price(df)
 
         # RSI 惩罚
+        # RSI 惩罚：真正按 RSI 区间扣分
         rsi_penalty = 0
-        if rsi_val > RSI_PENALTY_82:
-            rsi_penalty = RSI_PENALTY_82
-        elif rsi_val > RSI_PENALTY_75:
-            rsi_penalty = RSI_PENALTY_75
+        if rsi_val > 82:
+            rsi_penalty = 5
+        elif rsi_val > 75:
+            rsi_penalty = 2
 
-        total = (
-            trend_score * WEIGHT_TREND +
-            momentum_score * WEIGHT_MOMENTUM +
-            vol_score * WEIGHT_VOLUME
-        ) - rsi_penalty
-        total = max(total, 0)
+        raw = trend_score * WEIGHT_TREND + momentum_score * WEIGHT_MOMENTUM
+        total = raw / (WEIGHT_TREND + WEIGHT_MOMENTUM) - rsi_penalty
 
         return {
             "code": code,
@@ -511,7 +506,7 @@ def scan_market(codes: List[str],
 
     print(f"   参数: top_n={top_n}, min_volume={min_volume/1e8:.1f}亿, score_threshold={score_threshold}")
     print(f"   权重: 趋势={WEIGHT_TREND*100:.0f}% 动量={WEIGHT_MOMENTUM*100:.0f}% 量价={WEIGHT_VOLUME*100:.0f}%")
-    print(f"   RSI过滤: >{RSI_FILTER} 过滤, >{RSI_PENALTY_82} 扣{RSI_PENALTY_82}分, >{RSI_PENALTY_75} 扣{RSI_PENALTY_75}分")
+    print(f"   RSI过滤: >{RSI_FILTER} 过滤, >82 扣5分, >75 扣2分")
     print(f"   相对强弱: <{REL_STRENGTH_FILTER}% 过滤, <{-5}% 动量5折")
     print()
 
