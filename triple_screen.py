@@ -108,8 +108,8 @@ def step1_rps(
     df = df.sort_values("composite", ascending=False)
 
     print(f"   策略: RPS综合≥{rps_composite}, RPS20≥{rps20_min}, RSI[{rsi_low},{rsi_high}], "
-          f"20日涨幅≤{max_ret20}%, 近5日≤{max_ret5}%, 3日≥{ret3_min}%, "
-          f"5日换手≥{min_turnover}%")
+          f"20日涨幅≤{max_ret20}%, 20日涨幅≥-10%, 近5日≤{max_ret5}%, 3日≥{ret3_min}%, "
+          f"5日换手≥{min_turnover}%)")
     print(f"✅ Step1 完成: {len(df_all)} 只扫描 → {len(df)} 只蓄势强势股，用时 {time.time()-t0:.1f}s")
     for _, row in df.head(5).iterrows():
         print(f"   {row['code']} {row['name']:<8} 综合={row['composite']:.1f}  "
@@ -167,7 +167,8 @@ def step2_trend(
         )
         rows.append({
             "code": code, "name": name, "total_score": score,
-            "trend": trend_score, "momentum": momentum_score, "vol": vol_score,
+            "trend": trend_score, "momentum": momentum_score,
+            "vol": vol_score,   # 量能维度仅展示，不参与趋势评分
         })
 
     df = pd.DataFrame(rows)
@@ -198,8 +199,9 @@ def step3_gain(
     target_date: datetime | None,
     check_fundamental: bool,
     sector_bonus: bool,
-    check_volume_surge: bool,
-    max_workers: int,
+    volume_surge_ratio: float = 1.8,
+    check_volume_surge: bool = False,
+    max_workers: int = 8,
     min_turnover: float = 2.0,
     score_threshold: float = 40.0,
 ) -> list:
@@ -216,6 +218,7 @@ def step3_gain(
         check_fundamental=check_fundamental,
         sector_bonus=sector_bonus,
         check_volume_surge=check_volume_surge,
+        volume_surge_ratio=volume_surge_ratio,
         min_turnover=min_turnover,
         score_threshold=score_threshold,
     )
@@ -386,8 +389,9 @@ def main():
     parser.add_argument("--date", type=str, default=None, help="截止日期 YYYY-MM-DD（复盘用）")
     parser.add_argument("--check-fundamental", action="store_true", help="开启基本面检查（亏损扣分）")
     parser.add_argument("--sector-bonus", action="store_true", help="开启热门板块加分")
-    parser.add_argument("--no-check-volume-surge", dest="check_volume_surge", action="store_false", help="关闭放量检查（默认开启）")
-    parser.add_argument("--check-volume-surge", dest="check_volume_surge", action="store_true", default=True, help="开启放量检查（默认开启）")
+    parser.add_argument("--no-check-volume-surge", dest="check_volume_surge", action="store_false", help="关闭放量检查（默认关闭）")
+    parser.add_argument("--check-volume-surge", dest="check_volume_surge", action="store_true", default=False, help="开启放量检查（默认关闭）")
+    parser.add_argument("--volume-surge-ratio", type=float, default=1.8, help="放量倍数阈值（默认1.8）")
     parser.add_argument("--min-turnover-step3", type=float, default=2.0, help="Step3 5日均换手率下限/%%（默认2.0）")
     parser.add_argument("--score-threshold-step3", type=float, default=40.0, help="Step3 评分门槛（默认40.0）")
     parser.add_argument("--market-stop-loss", type=float, default=DEFAULT_MARKET_STOP_LOSS, help=f"市场止损（%%，默认{DEFAULT_MARKET_STOP_LOSS}）")
@@ -463,6 +467,7 @@ def main():
         target_date=target_date,
         check_fundamental=args.check_fundamental,
         sector_bonus=args.sector_bonus,
+        volume_surge_ratio=args.volume_surge_ratio,
         check_volume_surge=args.check_volume_surge,
         max_workers=args.workers,
         min_turnover=args.min_turnover_step3,

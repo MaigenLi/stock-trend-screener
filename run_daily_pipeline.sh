@@ -10,6 +10,8 @@ WORKSPACE="/home/lyc/.openclaw/workspace/stock_trend"
 PYTHON="/home/lyc/.venv/bin/python"
 DATE=$(date +%Y-%m-%d)
 
+find ~/.openclaw/workspace/stock_trend -name "__pycache__" -exec rm -rf {} +
+
 echo "========== 每日收盘流水线 [${DATE}] =========="
 
 # 步骤1：缓存基本面数据
@@ -37,10 +39,8 @@ echo "[$(date '+%H:%M:%S')] 步骤4完成，休息60秒..."
 sleep 60
 
 # 步骤5：选股筛选
-echo "[$(date '+%H:%M:%S')] 步骤5/6: gain_turnover_screen.py --check-fundamental --sector-bonus"
-#${PYTHON} ${WORKSPACE}/gain_turnover_screen.py --check-fundamental --sector-bonus --check-volume-surge --days 3 --max-gain 8 --top-n 200 >> ${LOG_DIR}/daily_screen.log 2>&1
-#${PYTHON} ${WORKSPACE}/triple_screen.py --check-fundamental --check-volume-surge --sector-bonus --days 3 --min-gain 2 --max-gain 8 >> ${LOG_DIR}/daily_screen.log 2>&1
-${PYTHON} ${WORKSPACE}/triple_screen.py --date ${DATE} --days 3 --min-gain 2 --max-gain 10 --check-volume-surge >> ${LOG_DIR}/daily_screen.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤5/6: triple_screen.py --date ${DATE}"
+${PYTHON} ${WORKSPACE}/triple_screen.py --date ${DATE} >> ${LOG_DIR}/daily_screen.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤5完成，休息60秒..."
 sleep 60
 
@@ -55,3 +55,4 @@ echo "[$(date '+%H:%M:%S')] 步骤7/7: trend_strong_screen.py --top-n 100"
 ${PYTHON} ${WORKSPACE}/trend_strong_screen.py --top-n 100 >> ${LOG_DIR}/trend_strong.log 2>&1
 
 echo "========== 每日收盘流水线完成 [$(date '+%H:%M:%S')] =========="
+
