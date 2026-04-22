@@ -91,11 +91,10 @@ def screen_market(
         f"评分门槛={config.score_threshold}"
     )
 
-    # ── 截面RPS预计算（全市场横向比较）────────────────────────────
-    # 先串行加载所有候选股数据，计算截面收益率排名
-    from gain_turnover import prepare_data, _compute_cross_sectional_rps
+    # ── 数据预加载 ────────────────────────────────────────────────
+    from gain_turnover import prepare_data
     prepared_data: dict = {}
-    print(f"   📊 截面RPS预计算（{total}只）...")
+    print(f"   📊 数据预加载（{total}只）...")
     t0_preload = time.time()
     for code in codes:
         c = normalize_prefixed(code)
@@ -111,11 +110,6 @@ def screen_market(
             continue
         idx = len(prep.dates) - 1
         prepared_data[c] = (prep, idx)
-    cross_rps = {}
-    if config.use_cross_rps and len(prepared_data) >= 2:
-        cross_rps = _compute_cross_sectional_rps(prepared_data, days=config.cross_rps_days)
-        rps_vals = list(cross_rps.values())
-        print(f"   截面RPS: min={min(rps_vals):.0f} max={max(rps_vals):.0f} median={sorted(rps_vals)[len(rps_vals)//2]:.0f}（耗时 {time.time()-t0_preload:.1f}s）")
     print(f"   ✅ 数据预加载完成: {len(prepared_data)}/{total} 只（耗时 {time.time()-t0_preload:.1f}s）")
 
     def work(code: str):
@@ -132,12 +126,11 @@ def screen_market(
             # 复用预加载的数据
             prep, _ = prepared_data[c]
             df = prep.df
-        crps = cross_rps.get(c) if config.use_cross_rps else None
+        crps = None  # 截面RPS已删除
         return evaluate_latest_signal(
             c, get_stock_name(c, names), df, config,
             top_sectors=top_sectors if config.sector_bonus else None,
             stock_sector_map=stock_sector_map if config.sector_bonus else None,
-            cross_rps={c: crps} if crps is not None else None,
         )
 
     done = 0

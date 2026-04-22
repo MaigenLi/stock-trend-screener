@@ -918,7 +918,7 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
         "extension_pct": round(float(extension_pct), 2),
         "sector_name": None,
         "sector_bonus_applied": 0.0,
-        "limit_up_bonus": limit_up_bonus,
+        "limit_up_bonus": 0.0,
         "rsi_tier": "🟢健康",
     }
 
@@ -1106,34 +1106,18 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
     close = prepared.close[idx]
     if not (close > ma5 >= ma10 * 0.995):
         reasons.append(f"均线多头排列不符(收盘{close:.2f} ma5{ma5:.2f} ma10{ma10:.2f})")
-
-    rsi = prepared.rsi14[idx] if not np.isnan(prepared.rsi14[idx]) else 50.0
-    if rsi >= 82:
-        reasons.append(f"RSI={rsi:.1f}≥82超买过滤")
+    # 均线排列确认（短期趋势：MA5 > MA10 且 MA10 > MA20）
+    ma20_prev = prepared.ma20[idx - 1] if idx >= 1 else ma20
+    if not (ma5 > ma10 and ma10 > ma20_prev * 1.0):
+        reasons.append(f"均线排列不符(ma5>{ma10:.2f}>ma20_prev{ma20_prev:.2f})")
 
     rejected_top, reason_top = _simplified_top_filter(prepared, idx)
     if rejected_top:
         signal_penalty_d += 5.0
         reasons.append(f"见顶风险({reason_top})（扣5分）")
 
-    # 评分（独立计算，不修改prepared）
-    gain10 = float((prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0) if idx >= 10 else 0.0
-    ma20_val = float(prepared.ma20[idx])
-    ma60_val = float(prepared.ma60[idx]) if not np.isnan(prepared.ma60[idx]) else 0.0
-    ma20_above_ma60 = 1.0 if (ma20_val > ma60_val > 0) else 0.0
-    ma5_above_ma10 = 0.5 if (ma5 > ma10) else 0.0
-    trend = ma20_above_ma60 + ma5_above_ma10
-    if idx >= 60:
-        low_60 = float(np.nanmin(prepared.low[idx-60:idx]))
-        high_60 = float(np.nanmax(prepared.high[idx-60:idx]))
-        range_60 = high_60 - low_60
-        position = (close - low_60) / range_60 * 100.0 if range_60 > 0 else 50.0
-    else:
-        position = 50.0
-    position_score = max(100.0 - position * 0.5, 0.0)
-    W1, W4 = 1.0, 1.0
-    score = W1 * trend + W4 * (position_score / 100.0 * 5.0)
-    score = max(round(score / (W1 + W4) * 20.0 - signal_penalty_d, 2), 0.0)
+    # 评分（基础分100，扣除见顶风险等软扣分）
+    score = max(round(100.0 - signal_penalty_d, 2), 0.0)
     if score < config.score_threshold:
         reasons.append(f"评分不足({score:.1f}<{config.score_threshold})")
 

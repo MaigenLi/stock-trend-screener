@@ -100,7 +100,7 @@ def step1_rps(
     df = df.sort_values("composite", ascending=False).head(300)
 
     print(f"   策略: RPS综合≥{rps_composite}, RPS20≥{rps20_min}（与rps_strong_screen逻辑一致）")
-    print(f"✅ Step1 完成: {len(df_all)} 只扫描 → Top50 用时 {time.time()-t0:.1f}s")
+    print(f"✅ Step1 完成: {len(df_all)} 只扫描 → Top{len(df)} 用时 {time.time()-t0:.1f}s")
     for _, row in df.head(5).iterrows():
         print(f"   {row['code']} {row.get('name',''):<8} 综合={row['composite']:.1f}  "
               f"RPS20={row['ret20_rps']:.1f}")
