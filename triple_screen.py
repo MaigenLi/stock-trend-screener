@@ -113,10 +113,12 @@ def step1_rps(
 # ─────────────────────────────────────────────────────────
 def step2_trend(
     step1_df: pd.DataFrame,
+    step1_all: pd.DataFrame,
     top_n: int,
     min_score: float,
     max_workers: int,
     target_date: datetime | None,
+    show_rejected: bool = False,
 ) -> tuple[pd.DataFrame, list]:
     t0 = time.time()
     codes = step1_df["code"].str.lower().tolist()
@@ -161,17 +163,68 @@ def step2_trend(
             "vol": vol_score,   # 量能维度仅展示，不参与趋势评分
         })
 
+    # 按 step1 顺序（综合分排序）保持不变，step2 只打分不排席
     df = pd.DataFrame(rows)
     if df.empty:
         print(f"⚠️ Step2: trend 筛选后无股票")
         return df, raw_results
 
-    df = df.sort_values("total_score", ascending=False)
     if not no_limit:
         df = df.head(top_n)
+
+    # ── show_rejected 时输出完整评分表 ───────────────────────
+    if show_rejected and not df.empty:
+        # 合并 RPS 数据（从 step1_all）
+        rps_cols = ["code", "ret20_rps", "ret60_rps", "ret120_rps", "composite"]
+        rps_df = step1_all[rps_cols].copy() if all(c in step1_all.columns for c in rps_cols) else pd.DataFrame()
+        if not rps_df.empty:
+            rps_df["code"] = rps_df["code"].str.lower()
+            df["code"] = df["code"].str.lower()
+            df = df.merge(rps_df, on="code", how="left")
+
+        # 保持 step1 顺序（按 composite 降序），code 在 step1_df 中的位置
+        code_order = {c: i for i, c in enumerate(step1_df["code"].str.lower().tolist())}
+        df["_order"] = df["code"].map(code_order)
+        df = df.sort_values("_order").drop(columns=["_order"])
+
+        # 列顺序：代码 | 名称 | RPS20 | RPS60 | RPS120 | 综合分 | 总分 | 趋势 | 动量 | 量价
+        cols_show = ["code", "name", "ret20_rps", "ret60_rps", "ret120_rps",
+                     "composite", "total_score", "trend", "momentum", "vol"]
+        show_df = df[[c for c in cols_show if c in df.columns]].copy()
+
+        # 自动列宽对齐
+        header = ["代码", "名称", "RPS20", "RPS60", "RPS120", "综合分", "总分", "趋势", "动量", "量价"]
+        rows_out = []
+        for _, r in show_df.iterrows():
+            rows_out.append([
+                r.get("code", ""),
+                r.get("name", ""),
+                f"{r.get('ret20_rps', 0):.1f}" if pd.notna(r.get('ret20_rps')) else "-",
+                f"{r.get('ret60_rps', 0):.1f}" if pd.notna(r.get('ret60_rps')) else "-",
+                f"{r.get('ret120_rps', 0):.1f}" if pd.notna(r.get('ret120_rps')) else "-",
+                f"{r.get('composite', 0):.1f}" if pd.notna(r.get('composite')) else "-",
+                f"{r.get('total_score', 0):.1f}",
+                f"{r.get('trend', 0):.1f}",
+                f"{r.get('momentum', 0):.1f}",
+                f"{r.get('vol', 0):.1f}",
+            ])
+
+        # 名称列（中文字符宽度问题：用全角空格补齐到偶数宽度）
+        col_widths_raw = [max(len(str(row[i])) for row in [header] + rows_out) for i in range(len(header))]
+        # 名称列(i==1)加倍宽度（中文2字节≈英文1字节）
+        col_widths = [max(w * 2 if i == 1 else w, len(header[i])) for i, w in enumerate(col_widths_raw)]
+
+        print(f"\n📋 Step2 趋势评分表（共 {len(rows_out)} 只）")
+        # 不用分隔符，纯空格列对齐
+        print("  ".join(h.ljust(col_widths[i]) for i, h in enumerate(header)))
+        print("  ".join("─" * col_widths[i] for i in range(len(header))))
+        for row in rows_out:
+            print("  ".join(str(row[i]).ljust(col_widths[i]) for i in range(len(row))))
+        print("  ".join("─" * col_widths[i] for i in range(len(header))) + "\n")
+
     print(f"✅ Step2 完成: {len(df)} 只趋势健康，用时 {time.time()-t0:.1f}s")
     for _, row in df.head(5).iterrows():
-        print(f"   {row['code']} {row['name']:<8} 总分={row['total_score']:.1f}  "
+        print(f"   {row['code']} {row.get('name',''):<8} 总分={row['total_score']:.1f}  "
               f"趋势={row['trend']:.1f} 动量={row['momentum']:.1f} 量价={row['vol']:.1f}")
 
     return df, raw_results
@@ -477,10 +530,12 @@ def main():
     # Step 2（Step1 已取 Top50）
     step2_df, _ = step2_trend(
         step1_df=step1_df,
+        step1_all=step1_all,
         top_n=0 if args.trend_top == 0 else args.trend_top,
         min_score=args.trend_score,
         max_workers=args.workers,
         target_date=target_date,
+        show_rejected=args.show_rejected,
     )
 
     if step2_df.empty:

@@ -694,36 +694,21 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
         return None
 
-    # ── 质量窗口过滤（可选）：近quality_days个交易日内必须有明显放量区间
-    # 逻辑：质量窗口内，任意连续 surge_days 日均 true_turnover >= 前 surge_days 日均 × 1.30
-    # 例：--days 2 → 窗口1-2 vs 3-4, 窗口2-3 vs 4-5, ..., 均满足则通过
-    if config.check_volume_surge and config.quality_days >= 5:
-        q_start = idx - config.quality_days + 1
-        quality_to = prepared.true_turnover[q_start: idx + 1]
-        surge_days = max(2, int(round(config.volume_surge_ratio)))  # 2.0=2天, 3.0=3天
-        found_surge = False
-        for i in range(len(quality_to) - surge_days * 2 + 1):
-            # 窗口A: quality_to[i : i+surge_days]  vs 窗口B: quality_to[i+surge_days : i+surge_days*2]
-            window_a = float(np.nanmean(quality_to[i: i + surge_days]))
-            window_b = float(np.nanmean(quality_to[i + surge_days: i + surge_days * 2]))
-            if (not np.isnan(window_a) and not np.isnan(window_b)
-                    and window_b > 0 and window_a >= window_b * config.volume_surge_ratio):
-                found_surge = True
-                break
-        if not found_surge:
-            return None
-
-    # 信号窗口过滤：允许 1/3 的交易日不满足 min_gain（days >= 3 时）
-    # 但最后一个交易日必须满足 > -3%（允许小幅回调但不超过 -3%）
-    # min_gain <= 0 时：完全跳过最低涨幅检查（视为"不限制"）
+    # 信号窗口软扣分（不硬过滤）
+    # 扣分项：末日军缩超标、低于min_gain天数超限、存在超max_gain
+    signal_penalty = 0.0
     if config.min_gain <= 0:
         below_min = 0
     else:
         below_min = (signal_gains < config.min_gain).sum()
     max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
     last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
-    if not (last_day_ok and below_min <= max_allowed_below and np.all(signal_gains <= config.max_gain)):
-        return None
+    if not last_day_ok:
+        signal_penalty += 10.0   # 末日军缩>-3%
+    if below_min > max_allowed_below:
+        signal_penalty += (below_min - max_allowed_below) * 3.0   # 每多1天多扣3分
+    if not np.all(signal_gains <= config.max_gain):
+        signal_penalty += 10.0   # 存在涨幅超max_gain
 
     avg_amt20 = prepared.avg_amount_20[idx]
     avg_to5 = prepared.avg_turnover_5[idx]
@@ -807,14 +792,15 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     # 线性加权（仅趋势+位置，换手率只做过滤条件）
     W1, W4 = 1.0, 1.0
     score = W1 * trend + W4 * (position_score / 100.0 * 5.0)
-    # 换算为百分制（满分100）
-    score = round(score / (W1 + W4) * 20.0, 2)  # → 0~100
+    # 换算为百分制（满分100），扣除信号窗口惩罚
+    score = max(round(score / (W1 + W4) * 20.0 - signal_penalty, 2), 0.0)
 
     subscores["trend"] = round(trend, 3)
     subscores["momentum"] = round(momentum, 2)
     subscores["vol_score"] = round(vol_score, 2)
     subscores["position"] = round(position, 2)
     subscores["position_score"] = round(position_score, 2)
+    subscores["signal_penalty"] = round(signal_penalty, 2)
 
     # 截面RPS加分（0~10）
     cross_rps_bonus = 0.0
@@ -988,6 +974,56 @@ def _ema(series: np.ndarray, n: int) -> np.ndarray:
     s = pd.Series(series)
     return s.ewm(span=n, adjust=False).mean().to_numpy()
 
+def _simplified_top_filter(prepared: PreparedData, idx: int) -> tuple[bool, str]:
+    """
+    简化见顶过滤（仅3项）：
+    - 放量大阴：跌幅>5% 且 量>MA5量×1.5（5日内）
+    - MACD高位死叉：DIF在零轴上方下穿DEA（5日内）
+    - 长上影线：上影>=实体×2 且 上影>股价×1% 且 振幅>2%（3日内）
+    返回 (rejected, reason)。
+    """
+    if idx < 5:
+        return False, ""
+    curr_close = float(prepared.close[idx])
+    prev_close = float(prepared.close[idx - 1]) if idx >= 1 else curr_close
+    vol_curr = float(prepared.volume[idx])
+    vol_ma5 = float(np.nanmean(prepared.volume[max(0, idx - 5):idx])) if idx >= 5 else float(np.nanmean(prepared.volume[:idx]))
+    if prev_close > 0:
+        drop_pct = (prev_close - curr_close) / prev_close * 100.0
+        if drop_pct > 5.0 and vol_curr > vol_ma5 * 1.5:
+            return True, "放量大阴"
+    if idx >= 22:
+        macd_close = prepared.close[idx - 22: idx + 1]
+        if len(macd_close) >= 27:
+            dif, dea, _ = _compute_macd(macd_close)
+            for d in range(1, len(dif)):
+                if dif[d] < dea[d] and dif[d-1] >= dea[d-1]:
+                    return True, "MACD高位死叉"
+    for d in range(min(3, idx + 1)):
+        o = float(prepared.open_[idx - d])
+        c = float(prepared.close[idx - d])
+        h = float(prepared.high[idx - d])
+        lo = float(prepared.low[idx - d])
+        today_close = float(prepared.close[idx])
+        body = abs(c - o)
+        upper_shadow = max(h - max(o, c), 0)
+        full_range = max(h - lo, 1e-6)
+        if not (body > 0 and upper_shadow >= body * 2.0
+                and upper_shadow > today_close * 0.01
+                and full_range / today_close * 100.0 > 2.0):
+            continue
+        next_offset = d - 1
+        if next_offset < 0 or next_offset >= idx:
+            return True, "长上影"
+        next_o = float(prepared.open_[idx - next_offset])
+        next_c = float(prepared.close[idx - next_offset])
+        next_body = next_c - next_o
+        if next_body > 0 and next_o <= c and next_c >= o:
+            continue
+        return True, "长上影"
+    return False, ""
+
+
 def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig) -> list[str]:
     """诊断 evaluate_signal 失败原因，返回所有不满足的条件列表。"""
     reasons = []
@@ -1014,18 +1050,23 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
                 found_surge = True
                 break
         if not found_surge:
-            reasons.append(f"质量窗口无明显放量({config.volume_surge_ratio}x)")
+            reasons.append(f"质量窗口无明显放量({config.volume_surge_ratio}x)（已改为软条件，仅影响评分）")
 
+    signal_penalty_d = 0.0
     if config.min_gain > 0:
         below_min = (signal_gains < config.min_gain).sum()
         max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
         last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
         if not last_day_ok:
-            reasons.append("信号窗口末日军缩>-3%")
+            signal_penalty_d += 10.0
+            reasons.append(f"信号窗口末日军缩>-3%（扣{10:.0f}分）")
         if below_min > max_allowed_below:
-            reasons.append(f"信号窗口{below_min}天<{config.min_gain}%(最多允{ max_allowed_below}天)")
+            deduction = (below_min - max_allowed_below) * 3.0
+            signal_penalty_d += deduction
+            reasons.append(f"信号窗口{below_min}天<{config.min_gain}%（扣{deduction:.0f}分）")
         if not np.all(signal_gains <= config.max_gain):
-            reasons.append(f"信号窗口存在哪天涨幅>{config.max_gain}%")
+            signal_penalty_d += 10.0
+            reasons.append(f"信号窗口存在涨幅>{config.max_gain}%%（扣10分）")
     elif config.min_gain <= 0:
         pass  # 不限制最低涨幅
 
@@ -1071,7 +1112,7 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
     position_score = max(100.0 - position * 0.5, 0.0)
     W1, W4 = 1.0, 1.0
     score = W1 * trend + W4 * (position_score / 100.0 * 5.0)
-    score = round(score / (W1 + W4) * 20.0, 2)
+    score = max(round(score / (W1 + W4) * 20.0 - signal_penalty_d, 2), 0.0)
     if score < config.score_threshold:
         reasons.append(f"评分不足({score:.1f}<{config.score_threshold})")
 
