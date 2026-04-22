@@ -188,8 +188,6 @@ class StrategyConfig:
     sector_bonus: bool = False         # 是否开启热门板块加分
     sector_top_n: int = 15             # 前N名板块视为热门板块
     sector_bonus_pts: float = 8.0      # 热门板块加分分值
-    check_volume_surge: bool = False  # 是否检查质量窗口内明显放量（默认关闭）
-    volume_surge_ratio: float = 1.8  # 放量倍数阈值（默认1.8倍）
     cross_rps_days: int = 20          # 截面RPS计算周期（默认20日）
     use_cross_rps: bool = True       # 是否启用截面RPS加分（默认开启）
 
@@ -1012,21 +1010,6 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
     quality_gains = prepared.gains[idx - config.quality_days + 1: idx + 1]
     if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
         reasons.append("信号/质量窗口含NaN")
-
-    if config.check_volume_surge and config.quality_days >= 5:
-        q_start = idx - config.quality_days + 1
-        quality_to = prepared.true_turnover[q_start: idx + 1]
-        surge_days = max(2, int(round(config.volume_surge_ratio)))
-        found_surge = False
-        for i in range(len(quality_to) - surge_days * 2 + 1):
-            window_a = float(np.nanmean(quality_to[i: i + surge_days]))
-            window_b = float(np.nanmean(quality_to[i + surge_days: i + surge_days * 2]))
-            if (not np.isnan(window_a) and not np.isnan(window_b)
-                    and window_b > 0 and window_a >= window_b * config.volume_surge_ratio):
-                found_surge = True
-                break
-        if not found_surge:
-            reasons.append(f"质量窗口无明显放量({config.volume_surge_ratio}x)（已改为软条件，仅影响评分）")
 
     signal_penalty_d = 0.0
     if config.min_gain > 0:

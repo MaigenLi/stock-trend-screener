@@ -242,8 +242,6 @@ def step3_gain(
     target_date: datetime | None,
     check_fundamental: bool,
     sector_bonus: bool,
-    volume_surge_ratio: float = 1.8,
-    check_volume_surge: bool = False,
     max_workers: int = 8,
     min_turnover: float = 2.0,
     score_threshold: float = 40.0,
@@ -261,8 +259,6 @@ def step3_gain(
         quality_days=quality_days,
         check_fundamental=check_fundamental,
         sector_bonus=sector_bonus,
-        check_volume_surge=check_volume_surge,
-        volume_surge_ratio=volume_surge_ratio,
         min_turnover=min_turnover,
         score_threshold=score_threshold,
     )
@@ -471,9 +467,6 @@ def main():
     parser.add_argument("--date", type=str, default=None, help="截止日期 YYYY-MM-DD（复盘用）")
     parser.add_argument("--check-fundamental", action="store_true", help="开启基本面检查（亏损扣分）")
     parser.add_argument("--sector-bonus", action="store_true", help="开启热门板块加分")
-    parser.add_argument("--no-check-volume-surge", dest="check_volume_surge", action="store_false", help="关闭放量检查（默认关闭）")
-    parser.add_argument("--check-volume-surge", dest="check_volume_surge", action="store_true", default=False, help="开启放量检查（默认关闭）")
-    parser.add_argument("--volume-surge-ratio", type=float, default=1.8, help="放量倍数阈值（默认1.8）")
     parser.add_argument("--min-turnover-step3", type=float, default=2.0, help="Step3 5日均换手率下限/%%（默认2.0）")
     parser.add_argument("--score-threshold-step3", type=float, default=40.0, help="Step3 评分门槛（默认40.0）")
     parser.add_argument("--market-stop-loss", type=float, default=DEFAULT_MARKET_STOP_LOSS, help=f"市场止损（%%，默认{DEFAULT_MARKET_STOP_LOSS}）")
@@ -496,8 +489,6 @@ def main():
         print(f"#        + 基本面检查")
     if args.sector_bonus:
         print(f"#        + 板块加分")
-    if args.check_volume_surge:
-        print(f"#        + 放量检查")
     print(f"{'#'*60}")
 
     # 市场止损检查
@@ -552,8 +543,6 @@ def main():
         target_date=target_date,
         check_fundamental=args.check_fundamental,
         sector_bonus=args.sector_bonus,
-        volume_surge_ratio=args.volume_surge_ratio,
-        check_volume_surge=args.check_volume_surge,
         max_workers=args.workers,
         min_turnover=args.min_turnover_step3,
         score_threshold=args.score_threshold_step3,
