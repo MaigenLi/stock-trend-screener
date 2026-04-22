@@ -228,7 +228,7 @@ def step3_gain(
 
     # ── 未入选股票诊断 ──────────────────────────────────
     rejected = []
-    if show_rejected and results:
+    if show_rejected:
         passed_codes = {r.code.lower() for r in results}
         rejected_codes = [c for c in codes if c.lower() not in passed_codes]
         end_date = target_date.strftime("%Y-%m-%d") if target_date else None
