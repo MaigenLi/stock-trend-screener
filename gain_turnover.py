@@ -976,11 +976,9 @@ def _ema(series: np.ndarray, n: int) -> np.ndarray:
 
 def _simplified_top_filter(prepared: PreparedData, idx: int) -> tuple[bool, str]:
     """
-    简化见顶过滤（仅3项）：
+    简化见顶过滤（仅2项）：
     - 放量大阴：跌幅>5% 且 量>MA5量×1.5（5日内）
     - MACD高位死叉：DIF在零轴上方下穿DEA（5日内）
-    - 长上影线：上影>=实体×2 且 上影>股价×1% 且 振幅>2%（3日内）
-    返回 (rejected, reason)。
     """
     if idx < 5:
         return False, ""
@@ -999,28 +997,6 @@ def _simplified_top_filter(prepared: PreparedData, idx: int) -> tuple[bool, str]
             for d in range(1, len(dif)):
                 if dif[d] < dea[d] and dif[d-1] >= dea[d-1]:
                     return True, "MACD高位死叉"
-    for d in range(min(3, idx + 1)):
-        o = float(prepared.open_[idx - d])
-        c = float(prepared.close[idx - d])
-        h = float(prepared.high[idx - d])
-        lo = float(prepared.low[idx - d])
-        today_close = float(prepared.close[idx])
-        body = abs(c - o)
-        upper_shadow = max(h - max(o, c), 0)
-        full_range = max(h - lo, 1e-6)
-        if not (body > 0 and upper_shadow >= body * 2.0
-                and upper_shadow > today_close * 0.01
-                and full_range / today_close * 100.0 > 2.0):
-            continue
-        next_offset = d - 1
-        if next_offset < 0 or next_offset >= idx:
-            continue  # 今日(D-0)无化解数据，跳过，继续检查昨日(D-1)
-        next_o = float(prepared.open_[idx - next_offset])
-        next_c = float(prepared.close[idx - next_offset])
-        next_body = next_c - next_o
-        if next_body > 0 and next_o <= c and next_c >= o:
-            continue
-        return True, "长上影"
     return False, ""
 
 
