@@ -152,6 +152,9 @@ def calc_stock_rps(
         if rsi_val > 88:
             return None
 
+        # 5日均成交额（亿元）
+        avg_amount_5 = float(amount_vals.iloc[-5:].mean()) / 1e8
+
         return {
             "code": code,
             "name": name,
@@ -162,6 +165,7 @@ def calc_stock_rps(
             "ret3": round(ret3, 2) if ret3 else 0.0,
             "rsi": round(rsi_val, 1),
             "avg_turnover_5": round(avg_turnover_5, 2),  # %
+            "avg_amount": round(avg_amount_5, 2),        # 亿元（5日均）
             "ma5_3day_above": ma5_3day_above,
             "data_date": actual_last,
         }
@@ -253,9 +257,9 @@ def print_rps_table(df: pd.DataFrame, title: str = "RPS 热力图", top_n: int =
     for _, row in df.iterrows():
         rsi_penalty = ""
         if row["rsi"] > 82:
-            rsi_penalty = "-40"
+            rsi_penalty = "-5"
         elif row["rsi"] > 75:
-            rsi_penalty = "-20"
+            rsi_penalty = "-2"
         rsi_str = f"{row['rsi']:.1f}{rsi_penalty}"
         print(_f([
             row["code"],
