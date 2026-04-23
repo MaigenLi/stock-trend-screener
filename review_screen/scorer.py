@@ -7,6 +7,48 @@
 import numpy as np
 
 
+def score_wave_quality(waves: list) -> float:
+    """
+    波段结构质量评分
+
+    【上涨波段】：相邻上坡比高点
+      curr.high > prev.high  → +2（一波比一波高，最好）
+      curr.high < prev.high  → -2（一波比一波低，最差）
+
+    【下跌波段】：相邻下坡比低点
+      curr.low > prev.low    → +1（低点抬高，结构向上）
+      curr.low < prev.low    → -1（低点上移，出货）
+    """
+    if not waves:
+        return 0.0
+
+    score = 0.0
+
+    # 分离上坡和下坡（从老到新）
+    ups = [w for w in waves if w["direction"] == "up"]
+    downs = [w for w in waves if w["direction"] == "down"]
+
+    # ── 上涨波段：相邻上坡比高点 ─────────────────────────────────
+    for i in range(1, len(ups)):
+        curr_h = ups[i]["wave_high"]
+        prev_h = ups[i - 1]["wave_high"]
+        if curr_h > prev_h:
+            score += 2.0
+        elif curr_h < prev_h:
+            score -= 2.0
+
+    # ── 下跌波段：相邻下坡比低点 ─────────────────────────────────
+    for i in range(1, len(downs)):
+        curr_lo = downs[i]["wave_low"]
+        prev_lo = downs[i - 1]["wave_low"]
+        if curr_lo > prev_lo:
+            score += 1.0
+        elif curr_lo < prev_lo:
+            score -= 1.0
+
+    return round(score, 1)
+
+
 def score_stock(ind: dict) -> float:
     """
     综合评分（0-100）
@@ -25,6 +67,11 @@ def score_stock(ind: dict) -> float:
     5. 整理模式（0-10分）：缩量整理加分
     """
     score = 0.0
+
+    # ── 0. 波段结构质量（+6分）──────────────────────────────
+    waves = ind.get("waves", [])
+    wave_quality = score_wave_quality(waves)
+    score += wave_quality
 
     # ── 1. DIF强度（0-25分）──────────────────────────
     dea = ind["dea"]
@@ -185,6 +232,9 @@ def score_detail(ind: dict) -> dict:
     elif up_ratio >= 0.5: con_score = 3.0
     else: con_score = 0.0
 
+    waves = ind.get("waves", [])
+    wave_quality = score_wave_quality(waves)
+
     return {
         "dif_score": round(dif_score, 1),
         "red_score": round(red_score, 1),
@@ -194,6 +244,7 @@ def score_detail(ind: dict) -> dict:
         "vol_burst_score": round(vr3_score, 1),
         "ma_score": round(ma_score, 1),
         "support_score": round(support_score, 1),
+        "wave_quality_score": round(wave_quality, 1),
         "consolidation_score": round(con_score, 1),
         "total": score_stock(ind),
     }

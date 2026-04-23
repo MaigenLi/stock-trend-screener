@@ -23,7 +23,13 @@ def compute_ma(closes: np.ndarray, periods: tuple = (5, 10, 20, 60)):
     return {p: pd.Series(closes).rolling(p).mean().values for p in periods}
 
 
-def detect_volume_price_wave(close: np.ndarray, volume: np.ndarray, lookback: int = 20) -> dict:
+def detect_volume_price_wave(
+    close: np.ndarray,
+    volume: np.ndarray,
+    lookback: int = 20,
+    high: np.ndarray | None = None,
+    low: np.ndarray | None = None,
+) -> dict:
     """
     周期模式识别（结构波段版）
 
@@ -158,12 +164,16 @@ def detect_volume_price_wave(close: np.ndarray, volume: np.ndarray, lookback: in
             "waves": [],
         }
 
-    # ── Step 3: 计算每个波段的均量、涨跌幅 ────────────────────
+    # ── Step 3: 计算每个波段的均量、涨跌幅、高低点 ──────────────────
+    high_arr = high if high is not None else close
+    low_arr = low if low is not None else close
     for w in waves:
         s, e = w["start_idx"], w["end_idx"]
         w["len"] = e - s + 1
         w["avg_volume"] = float(np.mean(volume[s:e + 1]))
         w["price_change"] = (close[e] / close[s] - 1) * 100 if close[s] > 0 else 0.0
+        w["wave_high"] = float(np.max(high_arr[s:e + 1]))
+        w["wave_low"] = float(np.min(low_arr[s:e + 1]))
 
     # ── Step 4: 分离涨段和跌段 ────────────────────────────────
     up_waves = [w for w in waves if w["direction"] == "up"]
@@ -335,6 +345,8 @@ def compute_all(df: pd.DataFrame) -> dict:
         return {}
 
     close = df["close"].values
+    high = df["high"].values
+    low = df["low"].values
     volume = df["volume"].values
     amount = df["amount"].values
 
@@ -412,7 +424,7 @@ def compute_all(df: pd.DataFrame) -> dict:
 
     # ── 周期量价模式识别（核心）───────────────────────────────
     # 识别近20日内的涨跌波段，对比涨段均量 vs 跌段均量
-    wave_pattern = detect_volume_price_wave(close, volume, lookback=60)
+    wave_pattern = detect_volume_price_wave(close, volume, lookback=60, high=high, low=low)
 
     # ── 止损位参考 ──────────────────────────────────────────────────
     # 红柱区间起始日前的低点（作为参考止损位）
