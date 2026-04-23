@@ -7,18 +7,33 @@
 import numpy as np
 
 
+def _find_ascending_start(ups: list) -> int:
+    """
+    扫描找到第一个连续递增三联 ups[i] < ups[i+1] < ups[i+2]
+    返回 u1 的索引 i，之前的波段全部丢弃不参与评分
+    """
+    for i in range(len(ups) - 2):
+        if ups[i]["wave_high"] < ups[i+1]["wave_high"] < ups[i+2]["wave_high"]:
+            return i
+    return 0  # 找不到则从初始评分（退化为旧行为）
+
+
 def score_wave_quality(waves: list) -> float:
     """
     波段结构质量评分
 
-    上涨波段（与前一上涨波段的高点比较）：
-      高点 > prev_high 且 < max(全部前高) + 2  → +1
-      高点 > prev_high 且 > max(全部前高) + 2  → +8
-      高点 < prev_high - 3                      → -3
+    先扫描找到第一个连续递增三联 u1<u3<u5，
+    从此之前的上涨/下跌波段全部丢弃不参与评分。
 
-    下跌波段（与前一下跌波段的低点比较）：
-      低点 > prev_low                          → +0（不加分）
-      低点 < prev_low                          → -1（新低）
+    上涨波段（从找到的 u1 开始）：
+      u3 > u1 → +2
+      u5 > u3 且 > max(全部前高) → +8
+      u5 > u3 但未破历史高 → +1
+      u5 < u3 → -3
+
+    下跌波段（与找到的 u1 对应的下跌波段开始）：
+      低点 > prev_low → +0（不加分）
+      低点 < prev_low → -1（新低）
     """
     if not waves:
         return 0.0
@@ -29,17 +44,20 @@ def score_wave_quality(waves: list) -> float:
     ups = [w for w in waves if w["direction"] == "up"]
     downs = [w for w in waves if w["direction"] == "down"]
 
-    # ── 上涨波段：与前一上涨波段高点比较 ──────────────────────────
-    for i in range(1, len(ups)):
+    # 找到第一个连续递增三联，丢弃之前的一切
+    start_u_idx = _find_ascending_start(ups)
+
+    # ── 上涨波段：从 start_u_idx 开始评分 ─────────────────────────
+    for i in range(start_u_idx + 1, len(ups)):
         curr_h = ups[i]["wave_high"]
         prev_h = ups[i - 1]["wave_high"]
 
         if curr_h > prev_h:
-            if i == 1:
-                # 第一次比较：只和prev比，+2
+            # 如果是 u1→u3 第一次比较（即 u1 为 start_u_idx）
+            if i == start_u_idx + 1:
                 score += 2.0
             else:
-                max_prior = max(ups[k]["wave_high"] for k in range(i))
+                max_prior = max(ups[k]["wave_high"] for k in range(start_u_idx, i))
                 if curr_h > max_prior:
                     score += 8.0  # 创历史新高
                 else:
@@ -47,8 +65,11 @@ def score_wave_quality(waves: list) -> float:
         elif curr_h < prev_h:
             score -= 3.0
 
-    # ── 下跌波段：与前一下跌波段低点比较 ──────────────────────────
-    for i in range(1, len(downs)):
+    # ── 下跌波段：从 start_u_idx 对应的下跌波段开始评分 ────────────
+    # 如果 start_u_idx > 0，跳过前 start_u_idx 个下跌波段的比较
+    #（这些下跌波段属于被丢弃的上涨波段区间）
+    d_start = max(1, start_u_idx)
+    for i in range(d_start, len(downs)):
         curr_lo = downs[i]["wave_low"]
         prev_lo = downs[i - 1]["wave_low"]
         if curr_lo < prev_lo:

@@ -353,19 +353,21 @@ if __name__ == "__main__":
         lines.append("")
 
         # 波段质量评分详细分解
+        from scorer import _find_ascending_start
         wq_total = score_wave_quality(waves)
+        start_u_idx = _find_ascending_start(up_waves)
         wq_lines = []
-        for i in range(1, len(up_waves)):
+        # 上涨波段：跳过 start_u_idx 之前的（被丢弃的波段）
+        for i in range(start_u_idx + 1, len(up_waves)):
             curr_h = up_waves[i]["wave_high"]
             prev_h = up_waves[i - 1]["wave_high"]
-            max_prior = max(up_waves[k]["wave_high"] for k in range(i))
             lbl_curr = f"u{2*i+1}"
             lbl_prev = f"u{2*i-1}"
             if curr_h > prev_h:
-                if i == 1:
+                if i == start_u_idx + 1:
                     wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +2")
                 else:
-                    max_prior = max(up_waves[k]["wave_high"] for k in range(i))
+                    max_prior = max(up_waves[k]["wave_high"] for k in range(start_u_idx, i))
                     if curr_h > max_prior:
                         wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +8 (创历史新高)")
                     else:
@@ -374,7 +376,8 @@ if __name__ == "__main__":
                 wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → -3")
             else:
                 wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → 0")
-        for i in range(1, len(down_waves)):
+        # 下跌波段：跳过前 start_u_idx 个
+        for i in range(max(1, start_u_idx), len(down_waves)):
             curr_lo = down_waves[i]["wave_low"]
             prev_lo = down_waves[i - 1]["wave_low"]
             lbl_curr = f"d{2*i+2}"
