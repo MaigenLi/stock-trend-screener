@@ -41,7 +41,6 @@ class FilterConfig:
     # ── 波段方向 ──────────────────────────────────────────
     require_latest_wave_down: bool = False  # 要求最新波段为下跌（蓄势找买点）
     min_latest_down_length: int = 2         # 下跌波段最小天数
-    require_first_up_ascending: bool = False  # 前三上涨波段必须u1<u3<u5（开启更严格的结构质量要求）
     strict_trend_only: bool = False         # 严格趋势（latest-wave-down专用：只要求MA条件）
 
     # ── 回调支撑 ──────────────────────────────────────────
