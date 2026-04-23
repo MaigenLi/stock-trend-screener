@@ -70,16 +70,21 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
     if len(ind) < 5:
         return False, "数据不足"
 
-    # ── 波段结构：前三上涨波段必须 u1 < u3 < u5（所有模式适用）─────
+    # ── 波段结构：扫描找到第一个连续递增的 u1 < u3 < u5 ──────────
     waves = ind.get("waves", [])
     up_waves = [w for w in waves if w["direction"] == "up"]
     if len(up_waves) < 3:
         return False, f"上涨波段不足3个（仅{len(up_waves)}个），无法验证结构"
-    u1_h = up_waves[0]["wave_high"]
-    u3_h = up_waves[1]["wave_high"]
-    u5_h = up_waves[2]["wave_high"]
-    if not (u1_h < u3_h < u5_h):
-        return False, f"前三上涨波段未满足u1<u3<u5（{u1_h:.2f}/{u3_h:.2f}/{u5_h:.2f}），结构不健康"
+
+    # 找到第一个连续递增的三联：ups[i] < ups[i+1] < ups[i+2]
+    # 如果中间断链（如 u3 >= u5），从断点之后重新开始扫描
+    found_idx = None
+    for i in range(len(up_waves) - 2):
+        if up_waves[i]["wave_high"] < up_waves[i+1]["wave_high"] < up_waves[i+2]["wave_high"]:
+            found_idx = i
+            break
+    if found_idx is None:
+        return False, "未找到连续递增的 u1<u3<u5 上涨序列"
     # ── latest-wave-down 模式：下跌段宽松，前一个上涨波段严格验证 ──
     if cfg.require_latest_wave_down:
         waves = ind.get("waves", [])
