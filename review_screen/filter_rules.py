@@ -41,6 +41,7 @@ class FilterConfig:
     # ── 波段方向 ──────────────────────────────────────────
     require_latest_wave_down: bool = False  # 要求最新波段为下跌（蓄势找买点）
     min_latest_down_length: int = 2         # 下跌波段最小天数
+    require_first_up_ascending: bool = False  # 前三上涨波段必须u1<u3<u5（开启更严格的结构质量要求）
     strict_trend_only: bool = False         # 严格趋势（latest-wave-down专用：只要求MA条件）
 
     # ── 回调支撑 ──────────────────────────────────────────
@@ -69,6 +70,16 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
     if len(ind) < 5:
         return False, "数据不足"
 
+    # ── 波段结构：前三上涨波段必须 u1 < u3 < u5（所有模式适用）─────
+    waves = ind.get("waves", [])
+    up_waves = [w for w in waves if w["direction"] == "up"]
+    if len(up_waves) < 3:
+        return False, f"上涨波段不足3个（仅{len(up_waves)}个），无法验证结构"
+    u1_h = up_waves[0]["wave_high"]
+    u3_h = up_waves[1]["wave_high"]
+    u5_h = up_waves[2]["wave_high"]
+    if not (u1_h < u3_h < u5_h):
+        return False, f"前三上涨波段未满足u1<u3<u5（{u1_h:.2f}/{u3_h:.2f}/{u5_h:.2f}），结构不健康"
     # ── latest-wave-down 模式：下跌段宽松，前一个上涨波段严格验证 ──
     if cfg.require_latest_wave_down:
         waves = ind.get("waves", [])
@@ -290,4 +301,4 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
         if up_ratio < cfg.min_up_ratio:
             return False, f"红柱区间上涨日{up_ratio:.0%}<50%（质量不足）"
 
-
+    return True, "通过"
