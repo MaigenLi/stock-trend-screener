@@ -120,6 +120,7 @@ def calc_stock_rps(
         ret120 = _ret(120)
         ret5 = _ret(5)
         ret3 = _ret(3)
+        ret1 = _ret(1)
 
         # 3日收盘都在MA5上方（蓄势确认）
         ma5_series = close.rolling(5).mean()
@@ -166,6 +167,7 @@ def calc_stock_rps(
             "ret120": round(ret120, 2),
             "ret5": round(ret5, 2) if ret5 else 0.0,
             "ret3": round(ret3, 2) if ret3 else 0.0,
+            "ret1": round(ret1, 2) if ret1 else 0.0,
             "rsi": round(rsi_val, 1),
             "avg_turnover_5": round(avg_turnover_5, 2),  # %
             "avg_amount": round(avg_amount_5, 2),        # 亿元（5日均）

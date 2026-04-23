@@ -3,7 +3,7 @@
 """
 三步量化选股系统（整合版）
 ==========================
-Step1: 综合RPS≥75，RSI 50~80，20日涨幅≤50%
+Step1: 当日涨幅[2%,7%]，RSI 50~88，20日涨幅≤50%，5日涨幅≤30%
 Step2: trend 验证趋势，确认均线多头
 Step3: gain_turnover 信号窗口启动（信号分仅含趋势+位置）
 
@@ -36,7 +36,9 @@ DEFAULT_MAX_RET20 = 50.0       # Step1: 20日涨幅上限（避开暴涨）
 DEFAULT_MAX_RET5 = 30.0        # Step1: 近5日涨幅上限（近期过速上涨则排除）
 DEFAULT_RET3_MIN = 5.0         # Step1: 近3日涨幅下限（剔除横盘，等于窗口加速确认）
 DEFAULT_MIN_TURNOVER_STEP1 = 2.0  # Step1: 5日均换手率下限（%%，市值相对）
-DEFAULT_STEP1_TOP = 50         # Step1: RPS扫描后保留数量（0=全部）
+DEFAULT_MARKET_RET21_MIN = 2.0    # Step1: 市场21日涨幅下限（%）
+DEFAULT_MARKET_RET21_MAX = 7.0    # Step1: 市场21日涨幅上限（%）
+DEFAULT_STEP1_TOP = 50         # Step1: 保留数量（0=全部）
 DEFAULT_GAIN_TOP = 100        # Step3: 保留数量（0=全部）
 DEFAULT_TREND_SCORE = 30.0    # Step2: 趋势评分门槛
 DEFAULT_GAIN_DAYS = 3
@@ -48,17 +50,11 @@ DEFAULT_MARKET_STOP_LOSS = -5.0  # 市场21日涨幅低于此值则跳过
 
 
 # ─────────────────────────────────────────────────────────
-# Step 1: RPS 扫描 → 蓄势强势股
+# Step 1: 涨幅扫描 → 强势市场中寻找标的
 # ─────────────────────────────────────────────────────────
-def step1_rps(
-    codes: list | None,
-    rps_composite: float,
-    rps20_min: float,
-    rsi_low: float,
-    rsi_high: float,
-    max_ret20: float,
-    max_ret5: float,
-    ret3_min: float,
+def step1_gain_scan(
+    min_gain: float,
+    max_gain: float,
     min_turnover: float,
     max_workers: int,
     target_date: datetime | None,
@@ -67,47 +63,41 @@ def step1_rps(
     """返回 (筛选后的df, 全市场df)"""
     t0 = time.time()
 
-    # 全市场扫描（始终用全市场算RPS排名，保证相对排名准确）
     all_codes = rps.get_all_stock_codes()
-    print(f"\n📊 Step 1/3 — RPS 全市场扫描（{len(all_codes)} 只）")
+    print(f"\n📊 Step 1/3 — 涨幅扫描（{len(all_codes)} 只）")
 
     df_all = rps.scan_rps(all_codes, top_n=len(all_codes), max_workers=max_workers, target_date=target_date)
 
-    # ── 排除当日无数据的股票 ──────────────────────────────
+    # 复盘模式：只保留目标日期有数据的股票
     if target_date is not None:
         target_str = target_date.strftime("%Y-%m-%d")
         before_count = len(df_all)
-        # scan_rps 返回空 DataFrame（0只有效）时无 data_date 列，需防御
         if "data_date" not in df_all.columns:
             print(f"   ⚠️  无有效股票数据（{len(df_all)} 只），跳过")
             return pd.DataFrame(), pd.DataFrame()
-        df_all = df_all[df_all["data_date"] == target_str]
-        after_count = len(df_all)
-        if before_count != after_count:
-            print(f"   ⚠️  排除当日无数据股票: {before_count - after_count} 只（缓存最新日期 < {target_str}），剩余 {after_count} 只")
+        df_all = df_all[df_all["data_date"] == target_str].copy()
+        if before_count != len(df_all):
+            print(f"   ⚠️  排除当日无数据股票: {before_count - len(df_all)} 只，剩余 {len(df_all)} 只")
 
-    # 若指定了 codes，则只保留指定范围（规范化前缀）
-    if codes is not None:
-        codes_normalized = [normalize_prefixed(c) for c in codes]
-        codes_lower = {c.lower() for c in codes_normalized}
-        df_all = df_all[df_all["code"].str.lower().isin(codes_lower)]
-        print(f"   限定范围: {len(codes)} 只（其余用于排名计算）")
-
-    # 筛选逻辑：与 rps_strong_screen.py 一致（仅 RPS 综合 + RPS20 门槛）
+    # 硬过滤：当日涨幅须满足[min_gain, max_gain]
     df = df_all[
-        (df_all["composite"] >= rps_composite) &
-        (df_all["ret20_rps"] >= rps20_min)
+        (df_all["ret1"] >= min_gain) &
+        (df_all["ret1"] <= max_gain) &
+        (df_all["avg_turnover_5"] >= min_turnover) &
+        (df_all["rsi"] >= 50.0) &
+        (df_all["rsi"] <= 88.0) &
+        (df_all["ret20"] <= 50.0) &
+        (df_all["ret5"] <= 30.0)
     ].copy()
 
-    df = df.sort_values("composite", ascending=False)
+    df = df.sort_values("ret3", ascending=False)
     if step1_top > 0:
         df = df.head(step1_top)
 
-    print(f"   策略: RPS综合≥{rps_composite}, RPS20≥{rps20_min}（与rps_strong_screen逻辑一致）")
+    print(f"   策略: 当日涨幅[{min_gain}%, {max_gain}%]，RSI 50~88，换手≥{min_turnover}%，20日涨幅≤50%，5日涨幅≤30%")
     print(f"✅ Step1 完成: {len(df_all)} 只扫描 → Top{len(df)} 用时 {time.time()-t0:.1f}s")
     for _, row in df.head(5).iterrows():
-        print(f"   {row['code']} {row.get('name',''):<8} 综合={row['composite']:.1f}  "
-              f"RPS20={row['ret20_rps']:.1f}")
+        print(f"   {row['code']} {row.get('name',''):<8} 当日={row['ret1']:+.2f}%  RSI={row['rsi']:.1f}  换手={row['avg_turnover_5']:.2f}%")
 
     return df, df_all
 
@@ -261,6 +251,7 @@ def step3_gain(
         sector_bonus=sector_bonus,
         min_turnover=min_turnover,
         score_threshold=score_threshold,
+        signal_hard_filter=True,  # v2 使用硬过滤+1/3豁免模式
     )
 
     from stock_trend.gain_turnover_screen import screen_market
@@ -500,18 +491,13 @@ def main():
     print(f"📈 市场21日涨幅: {market:.2f}%")
 
     # Step 1
-    step1_df, step1_all = step1_rps(
-        codes=args.codes,
-        rps_composite=args.rps_composite,
-        rps20_min=args.rps20_min,
-        rsi_low=args.rsi_low,
-        rsi_high=args.rsi_high,
-        max_ret20=args.max_ret20,
-        max_ret5=args.max_ret5,
-        ret3_min=args.ret3_min,
+    step1_df, step1_all = step1_gain_scan(
+        min_gain=args.min_gain,
+        max_gain=args.max_gain,
         min_turnover=args.min_turnover_step1,
         max_workers=args.workers,
         target_date=target_date,
+        step1_top=0,  # 涨幅扫描不过滤数量，全量输出给Step2
     )
 
     if step1_df.empty:

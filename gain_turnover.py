@@ -191,6 +191,7 @@ class StrategyConfig:
     sector_bonus_pts: float = 8.0      # 热门板块加分分值
     cross_rps_days: int = 20          # 截面RPS计算周期（默认20日）
     use_cross_rps: bool = True       # 是否启用截面RPS加分（默认开启）
+    signal_hard_filter: bool = False  # 信号窗口过滤模式：True=硬过滤+1/3豁免（v2用），False=软扣分（原版triple_screen用）
 
 @dataclass
 class FundamentalData:
@@ -814,21 +815,34 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
         return None
 
-    # 信号窗口软扣分（不硬过滤）
-    # 扣分项：末日军缩超标、低于min_gain天数超限、存在超max_gain
     signal_penalty = 0.0
-    if config.min_gain <= 0:
-        below_min = 0
+    if config.signal_hard_filter:
+        # v2 硬过滤：days≥3允许1/3天数<min_gain，超max_gain则硬过滤
+        if config.signal_days >= 3:
+            max_allowed_below = config.signal_days // 3
+        else:
+            max_allowed_below = 0
+        below_min = (signal_gains < config.min_gain).sum() if config.min_gain > 0 else 0
+        if config.min_gain > 0 and below_min > max_allowed_below:
+            return None
+        if (signal_gains > config.max_gain).any():
+            return None
+        if signal_gains[-1] <= -3.0:
+            return None
     else:
-        below_min = (signal_gains < config.min_gain).sum()
-    max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
-    last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
-    if not last_day_ok:
-        signal_penalty += 5.0   # 末日军缩>-3%
-    if below_min > max_allowed_below:
-        signal_penalty += 3.0   # 信号窗口低于min_gain天数超限
-    if not np.all(signal_gains <= config.max_gain):
-        signal_penalty += 2.0   # 存在涨幅超max_gain
+        # 原版软扣分（triple_screen用）
+        if config.min_gain <= 0:
+            below_min = 0
+        else:
+            below_min = (signal_gains < config.min_gain).sum()
+        max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
+        last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
+        if not last_day_ok:
+            signal_penalty += 5.0
+        if below_min > max_allowed_below:
+            signal_penalty += 3.0
+        if not np.all(signal_gains <= config.max_gain):
+            signal_penalty += 2.0
 
     avg_amt20 = prepared.avg_amount_20[idx]
     avg_to5 = prepared.avg_turnover_5[idx]
@@ -860,11 +874,11 @@ def evaluate_signal(prepared: PreparedData, idx: int, config: StrategyConfig,
     amount_ratio_5_20 = prepared.avg_amount_5[idx] / avg_amt20 if avg_amt20 > 0 and not np.isnan(prepared.avg_amount_5[idx]) else 1.0
     gain10 = (prepared.close[idx] / prepared.close[idx - 10] - 1.0) * 100.0
 
-    # 强制趋势过滤（仅保留核心约束）
-    if not (close > ma5 >= ma10 * 0.995):
+    # 均线排列确认（MA5 > MA20 且 MA10 > MA20）
+    if not (ma5 > ma20 and ma10 > ma20):
         return None
-    # 均线排列确认（短期趋势确认）
-    if not (ma5 > ma10 and ma10 > prepared.ma20[idx - 1] * 1.0):
+    # 收盘站稳 MA5 和 MA10 上方
+    if not (close > ma5 and close > ma10):
         return None
 
     # ── 简化见顶过滤（改为软扣分，不硬过滤）──────────────────────
@@ -1067,117 +1081,6 @@ def diagnose_rejection(prepared: PreparedData, idx: int, config: StrategyConfig)
     if idx < min_idx:
         reasons.append(f"历史数据不足(idx={idx}<{min_idx})")
         return reasons
-
-    signal_gains = prepared.gains[idx - config.signal_days + 1: idx + 1]
-    quality_gains = prepared.gains[idx - config.quality_days + 1: idx + 1]
-    if np.isnan(signal_gains).any() or np.isnan(quality_gains).any():
-        reasons.append("信号/质量窗口含NaN")
-
-    signal_penalty_d = 0.0
-    if config.min_gain > 0:
-        below_min = (signal_gains < config.min_gain).sum()
-        max_allowed_below = config.signal_days // 3 if config.signal_days >= 3 else 0
-        last_day_ok = (signal_gains[-1] > -3.0) if len(signal_gains) > 0 else True
-        if not last_day_ok:
-            signal_penalty_d += 5.0
-            reasons.append(f"信号窗口末日军缩>-3%（扣5分）")
-        if below_min > max_allowed_below:
-            signal_penalty_d += 3.0
-            reasons.append(f"信号窗口低于min_gain天数超限（扣3分）")
-        if not np.all(signal_gains <= config.max_gain):
-            signal_penalty_d += 2.0
-            reasons.append(f"信号窗口存在涨幅>{config.max_gain}%%（扣2分）")
-    elif config.min_gain <= 0:
-        pass  # 不限制最低涨幅
-
-    avg_amt20 = prepared.avg_amount_20[idx]
-    if np.isnan(avg_amt20) or avg_amt20 < config.min_amount:
-        reasons.append(f"20日均成交额不足({avg_amt20/1e8:.1f}亿<{config.min_amount/1e8:.1f}亿)")
-
-    avg_to5 = prepared.avg_turnover_5[idx]
-    if config.min_turnover > 0 and (np.isnan(avg_to5) or avg_to5 < config.min_turnover):
-        reasons.append(f"5日均换手率不足({avg_to5:.2f}%<{config.min_turnover}%)")
-
-    ma5 = prepared.ma5[idx]; ma10 = prepared.ma10[idx]
-    ma20 = prepared.ma20[idx]; ma60 = prepared.ma60[idx]
-    if np.isnan(ma5) or np.isnan(ma10) or np.isnan(ma20) or np.isnan(ma60):
-        reasons.append("均线数据缺失(MA5/MA10/MA20/MA60)")
-
-    close = prepared.close[idx]
-    if not (close > ma5 >= ma10 * 0.995):
-        reasons.append(f"均线多头排列不符(收盘{close:.2f} ma5{ma5:.2f} ma10{ma10:.2f})")
-    # 均线排列确认（短期趋势：MA5 > MA10 且 MA10 > MA20）
-    ma20_prev = prepared.ma20[idx - 1] if idx >= 1 else ma20
-    if not (ma5 > ma10 and ma10 > ma20_prev * 1.0):
-        reasons.append(f"均线排列不符(ma5>{ma10:.2f}>ma20_prev{ma20_prev:.2f})")
-
-    rejected_top, reason_top = _simplified_top_filter(prepared, idx)
-    if rejected_top:
-        signal_penalty_d += 5.0
-        reasons.append(f"见顶风险({reason_top})（扣5分）")
-
-    # 评分（基础分100，扣除见顶风险等软扣分）
-    score = max(round(100.0 - signal_penalty_d, 2), 0.0)
-    if score < config.score_threshold:
-        reasons.append(f"评分不足({score:.1f}<{config.score_threshold})")
-
-    return reasons
-
-    """
-    简化见顶过滤（仅3项）：
-    - 放量大阴：跌幅>5% 且 量>MA5量×1.5（5日内）
-    - MACD高位死叉：DIF在零轴上方下穿DEA（5日内）
-    - 长上影线：上影>=实体×2 且 上影>股价×1% 且 振幅>2%（3日内）
-    返回 (rejected, reason)。
-    """
-    if idx < 5:
-        return False, ""
-    # ── 放量大阴（当日跌幅>5% 且 量>MA5×1.5）────────────────────
-    curr_close = float(prepared.close[idx])
-    prev_close = float(prepared.close[idx - 1]) if idx >= 1 else curr_close
-    vol_curr = float(prepared.volume[idx])
-    vol_ma5 = float(np.nanmean(prepared.volume[max(0, idx - 5):idx])) if idx >= 5 else float(np.nanmean(prepared.volume[:idx]))
-    if prev_close > 0:
-        drop_pct = (prev_close - curr_close) / prev_close * 100.0   # 正数=下跌
-        if drop_pct > 5.0 and vol_curr > vol_ma5 * 1.5:
-            return True, "放量大阴"
-
-    # ── MACD高位死叉（5日内）──────────────────────────────────
-    if idx >= 22:
-        macd_close = prepared.close[idx - 22: idx + 1]
-        if len(macd_close) >= 27:
-            dif, dea, _ = _compute_macd(macd_close)
-            for d in range(1, len(dif)):
-                if dif[d] < dea[d] and dif[d-1] >= dea[d-1]:
-                    return True, "MACD高位死叉"
-
-    # ── 长上影线（3日内）+ 化解：次日阳线实体覆盖 ──────────────
-    for d in range(min(3, idx + 1)):
-        o = float(prepared.open_[idx - d])
-        c = float(prepared.close[idx - d])
-        h = float(prepared.high[idx - d])
-        lo = float(prepared.low[idx - d])
-        today_close = float(prepared.close[idx])
-        body = abs(c - o)
-        upper_shadow = max(h - max(o, c), 0)
-        full_range = max(h - lo, 1e-6)
-        if not (body > 0 and upper_shadow >= body * 2.0
-                and upper_shadow > today_close * 0.01
-                and full_range / today_close * 100.0 > 2.0):
-            continue
-
-        # 化解：被检验日(D日，即idx-d)的次日(D+1，即idx-d+1)阳线实体覆盖
-        next_offset = d - 1    # D+1相对idx的偏移（d=0→-1=无效；d=1→0=今日；d=2→1=昨日）
-        if next_offset < 0 or next_offset >= idx:
-            continue  # 今日(D-0)无化解数据，跳过，继续检查昨日(D-1)
-        next_o = float(prepared.open_[idx - next_offset])
-        next_c = float(prepared.close[idx - next_offset])
-        next_body = next_c - next_o
-        if next_body > 0 and next_o <= c and next_c >= o:
-            continue   # 被化解，不拒绝
-        reasons.append(f"见顶风险(长上影)")
-
-    return False, ""
 
 
 def _compute_cross_sectional_rps(
