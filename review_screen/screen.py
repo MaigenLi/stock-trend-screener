@@ -470,20 +470,15 @@ if __name__ == "__main__":
     # ─────────────────────────────────────────
     if args.waves:
         print(f"\n\n{'='*80}")
-        print(f"📈 完整涨跌波段详情（近60日）")
+        print(f"📈 完整涨跌波段详情（近60日，仅Top10）")
         print(f"{'='*80}")
 
-        # 显示所有通过的结果（太多时限制前30只）
-        show_count = min(len(results), 30)
-        for i, r in enumerate(results[:show_count]):
+        for i, r in enumerate(results[:10]):
             df, c = _load_df_for_waves(r['code'], target_date)
             if df is not None:
                 wave_lines = _format_wave_analysis(r, df, c)
                 for wl in wave_lines:
                     print(wl)
-
-        if len(results) > show_count:
-            print(f"\n...（还有{len(results) - show_count}只，显示上限30只）")
 
     # Top10摘要
     print(f"\n🏆 Top10（评分/3日涨幅/换手率/波段量比/止损参考）：")
