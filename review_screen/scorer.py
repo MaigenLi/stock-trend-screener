@@ -68,7 +68,7 @@ def score_stock(ind: dict) -> float:
     """
     score = 0.0
 
-    # ── 0. 波段结构质量（+6分）──────────────────────────────
+    # ── 0. 波段结构质量 ───────────────────────────────
     waves = ind.get("waves", [])
     wave_quality = score_wave_quality(waves)
     score += wave_quality

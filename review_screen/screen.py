@@ -24,7 +24,7 @@ sys.path.insert(0, str(WORKSPACE))
 from stock_trend.review_screen.data_cache import load_qfq_history, preload_all_codes
 from stock_trend.review_screen.indicators import compute_all, detect_volume_price_wave
 from stock_trend.review_screen.filter_rules import FilterConfig, check_filters
-from stock_trend.review_screen.scorer import score_stock
+from stock_trend.review_screen.scorer import score_stock, score_wave_quality
 
 DEFAULT_WORKERS = 8
 
@@ -94,6 +94,7 @@ def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig) -
 
     # 评分
     total_score = score_stock(ind)
+    ind["wave_quality_score"] = score_wave_quality(ind.get("waves", []))
     ind["code"] = c
     ind["name"] = get_stock_name(c, load_stock_names())
     ind["score"] = total_score
@@ -290,6 +291,32 @@ if __name__ == "__main__":
 
         lines.append("")
 
+        # 波段质量评分详细分解
+        wq_total = score_wave_quality(waves)
+        wq_lines = []
+        for i in range(1, len(up_waves)):
+            curr_h = up_waves[i]["wave_high"]
+            prev_h = up_waves[i - 1]["wave_high"]
+            lbl_curr = f"u{2*i+1}"
+            lbl_prev = f"u{2*i-1}"
+            if curr_h > prev_h:
+                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +2")
+            else:
+                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → -2")
+        for i in range(1, len(down_waves)):
+            curr_lo = down_waves[i]["wave_low"]
+            prev_lo = down_waves[i - 1]["wave_low"]
+            lbl_curr = f"d{2*i+2}"
+            lbl_prev = f"d{2*i}"
+            if curr_lo > prev_lo:
+                wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) > {lbl_prev}({prev_lo:.2f}) → +1")
+            else:
+                wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) < {lbl_prev}({prev_lo:.2f}) → -1")
+        lines.append("")
+        lines.append(f"  📊 波段质量评分（共 {wq_total:+.1f} 分）：")
+        for wl in wq_lines:
+            lines.append(wl)
+        lines.append("")
         if up_waves and down_waves:
             last_up = up_waves[-1]
             last_down = down_waves[-1]
@@ -370,7 +397,7 @@ if __name__ == "__main__":
     for i, r in enumerate(results[:10], 1):
         sl = f"{r['stop_loss_ref']:.2f}" if r.get('stop_loss_ref') else "N/A"
         wave_ratio = r.get('wave_up_vs_down_ratio', 0.0)
-        wave_score = r.get('wave_pattern_score', 0.0)
+        wave_quality = r.get('wave_quality_score', 0.0)
         wave_dir = r.get('wave_last_dir', 'N/A')
         ma5_d = r.get('ma5_distance_pct', 0.0)
         print(f"  {i:2d}. {r['code']} {r['name']:<6} "
@@ -378,6 +405,6 @@ if __name__ == "__main__":
               f"3日{r['gain3']:>+6.2f}%  "
               f"换手{r['turnover_est']:.1f}%  "
               f"波量比{wave_ratio:.2f}({wave_dir})  "
-              f"波评分{wave_score:.1f}  "
+              f"波评分{wave_quality:+.1f}  "
               f"MA5距{ma5_d:>+5.1f}%  "
               f"止损{sl}")
