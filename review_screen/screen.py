@@ -280,8 +280,10 @@ if __name__ == "__main__":
         """生成单只股票的完整波段分析文本"""
         close = df["close"].values
         volume = df["volume"].values
+        high = df["high"].values
+        low = df["low"].values
         lookback = min(60, len(close) - 1)
-        result = detect_volume_price_wave(close, volume, lookback=lookback)
+        result = detect_volume_price_wave(close, volume, lookback=lookback, high=high, low=low)
         waves = result.get("waves", [])
         if not waves:
             return []
@@ -412,7 +414,7 @@ if __name__ == "__main__":
         ind_for_detail = compute_all(df)
         if ind_for_detail:
             d = score_detail(ind_for_detail)
-            wq = r.get("wave_quality_score", 0.0)
+            wq = score_wave_quality(waves)  # 使用和详细分解一致的波段质量评分
             lines.append("")
             lines.append(f"  📊 综合评分明细（总分={r['score']:.1f}）：")
             lines.append(f"    DIF强度       {d['dif_score']:>5.1f} / 25")
