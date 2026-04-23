@@ -38,6 +38,11 @@ class FilterConfig:
     min_vol_up_vs_down: float = 1.2     # 波段涨/跌均量比下限
     min_vol_consec_strong: int = 2      # 连续放量天数下限
 
+    # ── 波段方向 ──────────────────────────────────────────
+    require_latest_wave_down: bool = False  # 要求最新波段为下跌（蓄势找买点）
+    min_latest_down_length: int = 2         # 下跌波段最小天数
+    strict_trend_only: bool = False         # 严格趋势（latest-wave-down专用：只要求MA条件）
+
     # ── 回调支撑 ──────────────────────────────────────────
     allow_broke_ma5_recently: bool = True   # 允许近期跌破MA5（强势回调）
     max_broke_ma10_days: int = 2          # 近3天跌破MA10上限
@@ -63,6 +68,72 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
     # ── 数据长度 ──────────────────────────────────────────
     if len(ind) < 5:
         return False, "数据不足"
+
+    # ── latest-wave-down 模式：下跌段宽松，前一个上涨波段严格验证 ──
+    if cfg.require_latest_wave_down:
+        waves = ind.get("waves", [])
+        if not waves:
+            return False, "无波段数据"
+        last_wave = waves[-1]
+        if last_wave["direction"] != "down":
+            return False, f"最新波段为{last_wave['direction']}非下跌"
+        if last_wave["len"] < cfg.min_latest_down_length:
+            return False, f"下跌波段仅{last_wave['len']}天<{cfg.min_latest_down_length}天"
+
+        # ① 当前下跌波段：只验证MA趋势
+        if not (ind["close"] > ind["ma20"]):
+            return False, f"收盘{ind['close']:.2f}≤MA20{ind['ma20']:.2f}"
+        if not (ind["ma20"] > ind["ma60"]):
+            return False, f"MA20{ind['ma20']:.2f}≤MA60{ind['ma60']:.2f}"
+        if not (ind["close"] > ind["ma60"]):
+            return False, f"收盘{ind['close']:.2f}≤MA60{ind['ma60']:.2f}"
+
+        # ② 前一个上涨波段：必须满足波段内每日MA20>MA60 & close>MA20 & close>MA60 & 换手率达标
+        if len(waves) < 2:
+            return False, "无前序上涨波段"
+        prev_wave = waves[-2]
+        if prev_wave["direction"] != "up":
+            return False, f"前序波段为{prev_wave['direction']}非上涨"
+
+        s = prev_wave["start_idx"]
+        e = prev_wave["end_idx"]
+        ma20_arr = ind["_ma20"]
+        ma60_arr = ind["_ma60"]
+        close_arr = ind["_close"]
+        turnover_arr = ind.get("_turnover")
+
+        market_cap = ind.get("market_cap", 0)
+        if market_cap >= 500:
+            min_turnover = 0.5
+        elif market_cap >= 100:
+            min_turnover = 1.0
+        elif market_cap >= 30:
+            min_turnover = 1.5
+        else:
+            min_turnover = 2.0
+
+        bad_days = []
+        for i in range(s, e + 1):
+            reasons = []
+            if ma20_arr[i] <= ma60_arr[i]:
+                reasons.append("MA20≤MA60")
+            if close_arr[i] <= ma20_arr[i]:
+                reasons.append("close≤MA20")
+            if close_arr[i] <= ma60_arr[i]:
+                reasons.append("close≤MA60")
+            if turnover_arr is not None and len(turnover_arr) > i:
+                if turnover_arr[i] < min_turnover:
+                    reasons.append(f"换手{turnover_arr[i]:.2f}%<{min_turnover}%")
+            if reasons:
+                bad_days.append((i, ", ".join(reasons)))
+
+        if bad_days:
+            bad_info = [f"{str(ind['_dates'][i])[:10]}({r})" for i, r in bad_days[:3]]
+            return False, f"前涨段{bad_info[0]}等日期不满足条件"
+
+        return True, "通过（下跌波段蓄势，前涨段量价健康）"
+
+
 
     # ── 趋势条件（核心：收盘>MA20）────────────────────────────
     if cfg.require_close_above_ma20:
@@ -176,7 +247,7 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
         return False, f"换手率{turnover:.2f}%<{min_turnover}%（{market_cap:.0f}亿市值档）"
 
     if ind.get("vol_ratio", 0) < cfg.min_vol_ratio:
-        return False, f"量比{ind.get('vol_ratio', 0):.2f}<1.0（量能偏弱）"
+        return False, f"量比{ind.get('vol_ratio', 0):.2f}<{cfg.min_vol_ratio}（量能偏弱）"
 
     # ── 周期量价模式（核心检查）──────────────────────────────
     if cfg.require_wave_up_gt_down:
@@ -219,4 +290,4 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
         if up_ratio < cfg.min_up_ratio:
             return False, f"红柱区间上涨日{up_ratio:.0%}<50%（质量不足）"
 
-    return True, "通过"
+

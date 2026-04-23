@@ -163,9 +163,11 @@ def scan_market(
     codes: list,
     target_date: datetime | None,
     max_workers: int = DEFAULT_WORKERS,
+    cfg: FilterConfig | None = None,
 ) -> list[dict]:
     """多线程扫描全市场"""
-    cfg = FilterConfig()
+    if cfg is None:
+        cfg = FilterConfig()
     results = []
     t0 = time.time()
     total = len(codes)
@@ -213,6 +215,7 @@ if __name__ == "__main__":
     parser.add_argument("--codes", nargs="+", default=None, help="指定股票代码列表（跳过全市场）")
     parser.add_argument("--output", type=str, default=None, help="输出文件路径")
     parser.add_argument("--waves", action="store_true", help="显示完整涨跌波段详情")
+    parser.add_argument("--latest-wave-down", action="store_true", help="只选当前处于下跌波段的股票（蓄势找买点）")
     args = parser.parse_args()
 
     # 解析日期
@@ -237,11 +240,17 @@ if __name__ == "__main__":
         codes = preload_all_codes()
         print(f"\n📊 筛选（全市场 {len(codes)} 只）")
 
+    # 构建筛选配置
+    cfg = FilterConfig(
+        require_latest_wave_down=args.latest_wave_down,
+    )
+
     # 扫描
     results = scan_market(
         codes=codes,
         target_date=target_date,
         max_workers=args.workers,
+        cfg=cfg,
     )
 
     if not results:
