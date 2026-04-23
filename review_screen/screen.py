@@ -28,6 +28,47 @@ from stock_trend.review_screen.scorer import score_stock, score_wave_quality, sc
 
 DEFAULT_WORKERS = 8
 
+# ─────────────────────────────────────────
+# 视觉对齐工具（中文=2字符宽度）
+# ─────────────────────────────────────────
+import unicodedata
+
+def _vw(s):
+    return sum(2 if unicodedata.east_asian_width(c) in ("W","F") else 1 for c in str(s))
+
+def _pr(s, w):
+    return str(s) + " " * max(0, w - _vw(s))
+
+def _pl(s, w):
+    return " " * max(0, w - _vw(s)) + str(s)
+
+# 每列（标签，宽度，对齐）'>'=右，'<'=左
+_COLS = [
+    ("代码",     10, ">"),
+    ("名称",      8, "<"),
+    ("日期",     12, "<"),
+    ("评分",      6, ">"),
+    ("红柱",      5, ">"),
+    ("收盘",      9, ">"),
+    ("3日%",     7, ">"),
+    ("换手%",    7, ">"),
+    ("量比",      6, ">"),
+    ("波量比",    7, ">"),
+    ("MA5距%",   8, ">"),
+    ("RSI",      6, ">"),
+    ("MA20",     8, ">"),
+    ("MA60",     8, ">"),
+]
+
+def _make_row(values):
+    parts = []
+    for (label, w, align), v in zip(_COLS, values):
+        parts.append(_pl(v, w) if align == ">" else _pr(v, w))
+    return " ".join(parts)
+
+def _header_row():
+    return _make_row([l for l, _, _ in _COLS])
+
 
 # ─────────────────────────────────────────
 # 工具函数
@@ -382,11 +423,7 @@ if __name__ == "__main__":
     print(f"📊 复盘选股 {date_str}（共 {len(results)} 只）")
     print("=" * 120)
 
-    header = (
-        f"{'代码':<10} {'名称':<8} {'日期':<12} {'评分':>6} {'红柱':>4} {'收盘':>8} "
-        f"{'3日%':>7} {'换手%':>6} {'量比':>5} {'波量比':>6} "
-        f"{'MA5距%':>7} {'RSI':>5} {'MA20':>8} {'MA60':>8}"
-    )
+    header = _header_row()
     print(header)
     print("-" * 120)
 
@@ -396,11 +433,15 @@ if __name__ == "__main__":
         ma5_dist = r.get('ma5_distance_pct', 0.0)
         wave_ratio = r.get('wave_up_vs_down_ratio', 0.0)
         sl_ref = r.get('stop_loss_ref')
-        row = (
-            f"{r['code']:<10} {r['name']:<8} {date_str:<12} {r['score']:>6.1f} {r['red_days']:>4d} {r['close']:>8.2f} "
-            f"{r['gain3']:>+6.1f}% {r['turnover_est']:>5.1f}% {r['vol_ratio']:>5.2f} {wave_ratio:>6.2f} "
-            f"{ma5_dist:>+6.1f}% {r['rsi']:>5.1f} {r['ma20']:>8.2f} {r['ma60']:>8.2f}"
-        )
+        row = _make_row([
+            r['code'], r['name'], date_str,
+            f"{r['score']:.1f}", r['red_days'],
+            f"{r['close']:.2f}",
+            f"{r['gain3']:+.1f}%", f"{r['turnover_est']:.1f}%",
+            f"{r['vol_ratio']:.2f}", f"{wave_ratio:.2f}",
+            f"{ma5_dist:+.1f}%", f"{r['rsi']:.1f}",
+            f"{r['ma20']:.2f}", f"{r['ma60']:.2f}",
+        ])
         print(row)
         lines.append(row)
 
