@@ -244,16 +244,16 @@ def compute_volume_metrics(
     vol_5_prior = np.nanmean(volume[-8:-3]) if len(volume) >= 8 else vol_5
     vol_ratio = float(volume[-1] / vol_5) if vol_5 > 0 else 0.0
     vol_trend = float(vol_5 / vol_20) if vol_20 > 0 else 0.0
-    # 换手率：优先用AkShare真实换手率（ratio=0.18，需×100转百分比）
+    # 换手率：AkShare的turnover列直接是百分比，无需再×100
     if turnover_true is not None and len(turnover_true) == len(volume):
-        turnover_est = float(turnover_true[-1]) * 100.0  # ratio → percentage
+        turnover_est = float(turnover_true[-1])  # 直接是百分比
     else:
         amt_5 = np.nanmean(amount[-5:]) if len(amount) >= 5 else np.nanmean(amount)
         turnover_est = float(volume[-1] / amt_5 * 100) if amt_5 > 0 else 0.0
 
     # 近5日均换手率
     if turnover_true is not None and len(turnover_true) >= 5:
-        avg_turnover_5 = float(np.nanmean(turnover_true[-5:])) * 100.0  # ratio → percentage
+        avg_turnover_5 = float(np.nanmean(turnover_true[-5:]))  # 直接是百分比
     else:
         avg_turnover_5 = turnover_est
 
@@ -451,7 +451,7 @@ def compute_all(df: pd.DataFrame) -> dict:
         "red_days": red_days,
         # 量能（使用真实换手率）
         **vol_metrics,
-        "turnover": float(turnover_true[idx]) * 100.0,  # ratio → percentage
+        "turnover": float(turnover_true[idx]),  # 直接是百分比
         "market_cap": market_cap,  # 流通市值（亿元）
         # RSI
         "rsi": rsi,

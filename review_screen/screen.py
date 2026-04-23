@@ -24,7 +24,7 @@ sys.path.insert(0, str(WORKSPACE))
 from stock_trend.review_screen.data_cache import load_qfq_history, preload_all_codes
 from stock_trend.review_screen.indicators import compute_all, detect_volume_price_wave
 from stock_trend.review_screen.filter_rules import FilterConfig, check_filters
-from stock_trend.review_screen.scorer import score_stock, score_wave_quality
+from stock_trend.review_screen.scorer import score_stock, score_wave_quality, score_detail
 
 DEFAULT_WORKERS = 8
 
@@ -42,13 +42,24 @@ def normalize_code(code: str) -> str:
 
 
 def load_stock_names() -> dict:
-    """加载股票名称映射"""
+    """加载股票名称映射（兼容嵌套stocks结构）"""
     names_file = Path.home() / "stock_code" / "results" / "all_stock_names_final.json"
     if not names_file.exists():
         return {}
     import json
     try:
-        return json.loads(names_file.read_text(encoding="utf-8"))
+        data = json.loads(names_file.read_text(encoding="utf-8"))
+        stocks = data.get("stocks", {}) if isinstance(data, dict) else {}
+        names = {}
+        for code, info in stocks.items():
+            if not isinstance(info, dict):
+                continue
+            name = info.get("name", "未知")
+            names[code.lower()] = name
+            pure = info.get("code", "")
+            if pure:
+                names[pure.lower()] = name
+        return names
     except Exception:
         return {}
 
@@ -297,21 +308,31 @@ if __name__ == "__main__":
         for i in range(1, len(up_waves)):
             curr_h = up_waves[i]["wave_high"]
             prev_h = up_waves[i - 1]["wave_high"]
+            max_prior = max(up_waves[k]["wave_high"] for k in range(i))
             lbl_curr = f"u{2*i+1}"
             lbl_prev = f"u{2*i-1}"
             if curr_h > prev_h:
-                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +2")
+                if i == 1:
+                    wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +2")
+                else:
+                    max_prior = max(up_waves[k]["wave_high"] for k in range(i))
+                    if curr_h > max_prior:
+                        wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +8 (创历史新高)")
+                    else:
+                        wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +1")
+            elif curr_h < prev_h:
+                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → -3")
             else:
-                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → -2")
+                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → 0")
         for i in range(1, len(down_waves)):
             curr_lo = down_waves[i]["wave_low"]
             prev_lo = down_waves[i - 1]["wave_low"]
             lbl_curr = f"d{2*i+2}"
             lbl_prev = f"d{2*i}"
-            if curr_lo > prev_lo:
-                wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) > {lbl_prev}({prev_lo:.2f}) → +1")
-            else:
+            if curr_lo < prev_lo:
                 wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) < {lbl_prev}({prev_lo:.2f}) → -1")
+            else:
+                wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) >= {lbl_prev}({prev_lo:.2f}) → +0")
         lines.append("")
         lines.append(f"  📊 波段质量评分（共 {wq_total:+.1f} 分）：")
         for wl in wq_lines:
@@ -333,6 +354,25 @@ if __name__ == "__main__":
                         f"比值={all_ratio:.2f} {'✅' if all_ratio > 1.0 else '❌'}")
             lines.append(f"    波段模式评分: {result['pattern_score']} {'✅' if result['pattern_score'] >= 0.4 else '❌'}")
 
+        # ── 综合评分明细 ──────────────────────────────────
+        # 重建完整指标以获取评分明细
+        ind_for_detail = compute_all(df)
+        if ind_for_detail:
+            d = score_detail(ind_for_detail)
+            wq = r.get("wave_quality_score", 0.0)
+            lines.append("")
+            lines.append(f"  📊 综合评分明细（总分={r['score']:.1f}）：")
+            lines.append(f"    DIF强度       {d['dif_score']:>5.1f} / 25")
+            lines.append(f"    红柱新鲜度   {d['red_score']:>5.1f} / 20")
+            lines.append(f"    量能质量     {d['turnover_score']:>5.1f} /  8（换手）")
+            lines.append(f"    量比         {d['volume_score']:>5.1f} /  5")
+            lines.append(f"    波段结构     {d['vol_structure_score']:>5.1f} /  8")
+            lines.append(f"    爆发力       {d['vol_burst_score']:>5.1f} /  4")
+            lines.append(f"    均线质量     {d['ma_score']:>5.1f} / 15")
+            lines.append(f"    回调支撑     {d['support_score']:>5.1f} /  5")
+            lines.append(f"    整理模式     {d['consolidation_score']:>5.1f} / 10")
+            lines.append(f"    波段质量     {wq:>+6.1f}")
+
         return lines
 
     # ─────────────────────────────────────────
@@ -343,7 +383,7 @@ if __name__ == "__main__":
     print("=" * 120)
 
     header = (
-        f"{'代码':<10} {'名称':<8} {'评分':>6} {'红柱':>4} {'收盘':>8} "
+        f"{'代码':<10} {'名称':<8} {'日期':<12} {'评分':>6} {'红柱':>4} {'收盘':>8} "
         f"{'3日%':>7} {'换手%':>6} {'量比':>5} {'波量比':>6} "
         f"{'MA5距%':>7} {'RSI':>5} {'MA20':>8} {'MA60':>8}"
     )
@@ -357,7 +397,7 @@ if __name__ == "__main__":
         wave_ratio = r.get('wave_up_vs_down_ratio', 0.0)
         sl_ref = r.get('stop_loss_ref')
         row = (
-            f"{r['code']:<10} {r['name']:<8} {r['score']:>6.1f} {r['red_days']:>4d} {r['close']:>8.2f} "
+            f"{r['code']:<10} {r['name']:<8} {date_str:<12} {r['score']:>6.1f} {r['red_days']:>4d} {r['close']:>8.2f} "
             f"{r['gain3']:>+6.1f}% {r['turnover_est']:>5.1f}% {r['vol_ratio']:>5.2f} {wave_ratio:>6.2f} "
             f"{ma5_dist:>+6.1f}% {r['rsi']:>5.1f} {r['ma20']:>8.2f} {r['ma60']:>8.2f}"
         )

@@ -11,13 +11,14 @@ def score_wave_quality(waves: list) -> float:
     """
     波段结构质量评分
 
-    【上涨波段】：相邻上坡比高点
-      curr.high > prev.high  → +2（一波比一波高，最好）
-      curr.high < prev.high  → -2（一波比一波低，最差）
+    上涨波段（与前一上涨波段的高点比较）：
+      高点 > prev_high 且 < max(全部前高) + 2  → +1
+      高点 > prev_high 且 > max(全部前高) + 2  → +8
+      高点 < prev_high - 3                      → -3
 
-    【下跌波段】：相邻下坡比低点
-      curr.low > prev.low    → +1（低点抬高，结构向上）
-      curr.low < prev.low    → -1（低点上移，出货）
+    下跌波段（与前一下跌波段的低点比较）：
+      低点 > prev_low                          → +0（不加分）
+      低点 < prev_low                          → -1（新低）
     """
     if not waves:
         return 0.0
@@ -28,23 +29,31 @@ def score_wave_quality(waves: list) -> float:
     ups = [w for w in waves if w["direction"] == "up"]
     downs = [w for w in waves if w["direction"] == "down"]
 
-    # ── 上涨波段：相邻上坡比高点 ─────────────────────────────────
+    # ── 上涨波段：与前一上涨波段高点比较 ──────────────────────────
     for i in range(1, len(ups)):
         curr_h = ups[i]["wave_high"]
         prev_h = ups[i - 1]["wave_high"]
-        if curr_h > prev_h:
-            score += 2.0
-        elif curr_h < prev_h:
-            score -= 2.0
 
-    # ── 下跌波段：相邻下坡比低点 ─────────────────────────────────
+        if curr_h > prev_h:
+            if i == 1:
+                # 第一次比较：只和prev比，+2
+                score += 2.0
+            else:
+                max_prior = max(ups[k]["wave_high"] for k in range(i))
+                if curr_h > max_prior:
+                    score += 8.0  # 创历史新高
+                else:
+                    score += 1.0  # 高于prev但不破历史
+        elif curr_h < prev_h:
+            score -= 3.0
+
+    # ── 下跌波段：与前一下跌波段低点比较 ──────────────────────────
     for i in range(1, len(downs)):
         curr_lo = downs[i]["wave_low"]
         prev_lo = downs[i - 1]["wave_low"]
-        if curr_lo > prev_lo:
-            score += 1.0
-        elif curr_lo < prev_lo:
+        if curr_lo < prev_lo:
             score -= 1.0
+        # curr_lo > prev_lo → +0，不加分不减分
 
     return round(score, 1)
 
