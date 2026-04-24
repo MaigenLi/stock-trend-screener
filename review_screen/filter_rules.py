@@ -6,6 +6,8 @@
 
 from dataclasses import dataclass
 
+from utils import w_get, find_ascending_start
+
 
 @dataclass
 class FilterConfig:
@@ -28,8 +30,8 @@ class FilterConfig:
     max_red_days: int = 30               # 红柱天数上限（>20=主升浪，<15=新鲜启动）
 
     # ── 涨幅条件 ──────────────────────────────────────────
-    min_gain3: float = 3.0     # 3日涨幅下限
-    max_gain3: float = 22.0    # 3日涨幅上限（>18%过热，>22%风险大）
+    min_gain5: float = 3.0     # 5日涨幅下限
+    max_gain5: float = 22.0    # 5日涨幅上限（>18%过热，>22%风险大）
     max_gain20: float = 60.0   # 20日涨幅上限
 
     # ── 量能条件 ──────────────────────────────────────────
@@ -45,7 +47,7 @@ class FilterConfig:
 
     # ── 回调支撑 ──────────────────────────────────────────
     allow_broke_ma5_recently: bool = True   # 允许近期跌破MA5（强势回调）
-    max_broke_ma10_days: int = 2          # 近3天跌破MA10上限
+    max_broke_ma10_days: int = 3          # 跌破MA10的天数窗口上限（compute_all 用此值计算 broke_ma10_count）
 
     # ── 周期量价模式（核心）────────────────────────────────
     require_wave_up_gt_down: bool = True  # 必须满足涨段均量>跌段均量
@@ -71,29 +73,25 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
 
     # ── 波段结构：扫描找到第一个连续递增的 u1 < u3 < u5 ──────────
     waves = ind.get("waves", [])
-    up_waves = [w for w in waves if w["direction"] == "up"]
+    up_waves = [w for w in waves if w_get(w, "direction") == "up"]
     if len(up_waves) < 3:
         return False, f"上涨波段不足3个（仅{len(up_waves)}个），无法验证结构"
 
     # 找到第一个连续递增的三联：ups[i] < ups[i+1] < ups[i+2]
-    # 如果中间断链（如 u3 >= u5），从断点之后重新开始扫描
-    found_idx = None
-    for i in range(len(up_waves) - 2):
-        if up_waves[i]["wave_high"] < up_waves[i+1]["wave_high"] < up_waves[i+2]["wave_high"]:
-            found_idx = i
-            break
+    # 找不到时严格拒绝（保持原有行为）
+    found_idx = find_ascending_start(up_waves, default=None)
     if found_idx is None:
         return False, "未找到连续递增的 u1<u3<u5 上涨序列"
     # ── latest-wave-down 模式：下跌段宽松，前一个上涨波段严格验证 ──
     if cfg.require_latest_wave_down:
-        waves = ind.get("waves", [])
-        if not waves:
+        wave_list = ind.get("waves", [])
+        if not wave_list:
             return False, "无波段数据"
-        last_wave = waves[-1]
-        if last_wave["direction"] != "down":
-            return False, f"最新波段为{last_wave['direction']}非下跌"
-        if last_wave["len"] < cfg.min_latest_down_length:
-            return False, f"下跌波段仅{last_wave['len']}天<{cfg.min_latest_down_length}天"
+        last_wave = wave_list[-1]
+        if w_get(last_wave, "direction") != "down":
+            return False, f"最新波段为{w_get(last_wave, 'direction')}非下跌"
+        if w_get(last_wave, "len") < cfg.min_latest_down_length:
+            return False, f"下跌波段仅{w_get(last_wave, 'len')}天<{cfg.min_latest_down_length}天"
 
         # ① 当前下跌波段：只验证MA趋势
         if not (ind["close"] > ind["ma20"]):
@@ -107,11 +105,11 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
         if len(waves) < 2:
             return False, "无前序上涨波段"
         prev_wave = waves[-2]
-        if prev_wave["direction"] != "up":
-            return False, f"前序波段为{prev_wave['direction']}非上涨"
+        if w_get(prev_wave, "direction") != "up":
+            return False, f"前序波段为{w_get(prev_wave, 'direction')}非上涨"
 
-        s = prev_wave["start_idx"]
-        e = prev_wave["end_idx"]
+        s = w_get(prev_wave, "start_idx")
+        e = w_get(prev_wave, "end_idx")
         ma20_arr = ind["_ma20"]
         ma60_arr = ind["_ma60"]
         close_arr = ind["_close"]
@@ -165,11 +163,11 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
 
     # ── 硬性条件：波段内每个交易日必须 MA20>MA60, close>MA20, close>MA60, 换手率达标 ──────────────────────
     if cfg.require_wave_ma20_above_ma60:
-        waves = ind.get("waves", [])
-        if waves:
-            last_wave = waves[-1]
-            s = last_wave["start_idx"]
-            e = last_wave["end_idx"]
+        wave_list = ind.get("waves", [])
+        if wave_list:
+            last_wave = wave_list[-1]
+            s = w_get(last_wave, "start_idx")
+            e = w_get(last_wave, "end_idx")
             ma20_arr = ind["_ma20"]
             ma60_arr = ind["_ma60"]
             close_arr = ind["_close"]
@@ -233,15 +231,14 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
         return False, f"红柱天数{red_days}>30（已过度运行）"
 
     # ── 涨幅条件 ──────────────────────────────────────────
-    gain1 = ind.get("gain1", 0)
-    gain3 = ind.get("gain3", 0)
+    gain5 = ind.get("gain5", 0)
     gain20 = ind.get("gain20", 0)
 
-    if gain3 <= cfg.min_gain3:
-        return False, f"3日涨幅{gain3:.2f}%<3%（动能不足）"
+    if gain5 <= cfg.min_gain5:
+        return False, f"5日涨幅{gain5:.2f}%<{cfg.min_gain5}%（动能不足）"
 
-    if gain3 >= cfg.max_gain3:
-        return False, f"3日涨幅{gain3:.2f}%≥{cfg.max_gain3}%（已过热）"
+    if gain5 >= cfg.max_gain5:
+        return False, f"5日涨幅{gain5:.2f}%≥{cfg.max_gain5}%（已过热）"
 
     if gain20 >= cfg.max_gain20:
         return False, f"20日涨幅{gain20:.2f}%≥60%（位置太高）"
@@ -284,7 +281,7 @@ def check_filters(ind: dict, cfg: FilterConfig = None) -> tuple[bool, str]:
             return False, "近期曾跌破MA5（支撑不稳）"
 
     if ind.get("broke_ma10_count", 0) > cfg.max_broke_ma10_days:
-        return False, f"近3天{ind.get('broke_ma10_count', 0)}天跌破MA10（趋势偏弱）"
+        return False, f"近{max(cfg.max_broke_ma10_days, 3)}天{ind.get('broke_ma10_count', 0)}天跌破MA10（趋势偏弱）"
 
     # ── 风险过滤 ──────────────────────────────────────────
     if ind.get("rsi", 50) > cfg.max_rsi:

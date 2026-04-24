@@ -24,7 +24,8 @@ sys.path.insert(0, str(WORKSPACE))
 from stock_trend.review_screen.data_cache import load_qfq_history, preload_all_codes
 from stock_trend.review_screen.indicators import compute_all, detect_volume_price_wave
 from stock_trend.review_screen.filter_rules import FilterConfig, check_filters
-from stock_trend.review_screen.scorer import score_stock, score_wave_quality, score_detail
+from stock_trend.review_screen.scorer import score_stock, score_wave_quality, score_detail, classify_phase
+from stock_trend.review_screen.utils import find_ascending_start
 
 DEFAULT_WORKERS = 8
 
@@ -114,9 +115,15 @@ def get_stock_name(code: str, names: dict) -> str:
 # 单股评估
 # ─────────────────────────────────────────
 
-def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig) -> dict | None:
+def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig, names: dict) -> dict | None:
     """
     评估单只股票
+
+    Args:
+        code: 股票代码
+        target_date: 信号日期
+        cfg: 筛选配置
+        names: 股票名称映射（由 scan_market 加载一次后传入）
 
     Returns:
         完整结果字典 或 None（不通过筛选）
@@ -134,8 +141,8 @@ def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig) -
     if len(df) < cfg.min_bars:
         return None
 
-    # 计算指标
-    ind = compute_all(df)
+    # 计算指标（使用配置中的窗口参数）
+    ind = compute_all(df, ma10_break_window=cfg.max_broke_ma10_days)
     if not ind:
         return None
 
@@ -148,9 +155,14 @@ def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig) -
     total_score = score_stock(ind)
     ind["wave_quality_score"] = score_wave_quality(ind.get("waves", []))
     ind["code"] = c
-    ind["name"] = get_stock_name(c, load_stock_names())
+    ind["name"] = get_stock_name(c, names)
     ind["score"] = total_score
     ind["_reason"] = reason
+
+    # 阶段标签
+    phase, phase_reason = classify_phase(ind)
+    ind["phase"] = phase
+    ind["phase_reason"] = phase_reason
 
     return ind
 
@@ -172,8 +184,11 @@ def scan_market(
     t0 = time.time()
     total = len(codes)
 
+    # 名称映射只加载一次（避免每只股票重复读文件）
+    names = load_stock_names()
+
     def work(code: str) -> dict | None:
-        return evaluate_stock(code, target_date, cfg)
+        return evaluate_stock(code, target_date, cfg, names)
 
     done = [0]
 
@@ -293,140 +308,128 @@ if __name__ == "__main__":
         lines.append(f"  {r['code']} {r['name']} 评分={r['score']}  红柱={r['red_days']}天  信号日={date_str}")
         lines.append(f"{'─'*60}")
 
-        # 近60日波段列表（从老到新）
-        lines.append(f"  近{lookback}日涨跌波段（共{len(waves)}个）：")
-        lines.append("")
+        from scorer import score_wave_quality
+        up_waves = [w for w in waves if w.direction == 'up']
+        down_waves = [w for w in waves if w.direction == 'down']
+        start_u_idx = find_ascending_start(up_waves)
 
-        for j, w in enumerate(waves):
-            start_date = str(df["date"].iloc[w["start_idx"]])[:10]
-            end_date = str(df["date"].iloc[w["end_idx"]])[:10]
-            dir_icon = "↑" if w["direction"] == "up" else "↓"
-            price_str = f"{w['price_change']:+.2f}%"
+        # ── 计算显示起点：丢弃 start_u_idx 个上涨及其间下跌 ────
+        # 起点 = start_u_idx 对应上涨段在 waves 中的位置
+        u1_wave = up_waves[start_u_idx]
+        display_start = next(i for i, w in enumerate(waves) if w is u1_wave)
 
-            # 判断健康状态
-            if w["direction"] == "up":
-                # 找前一个跌段做对比
-                if j > 0:
-                    prev_w = waves[j - 1]
-                    if prev_w["direction"] == "down":
-                        vol_ratio = w["avg_volume"] / max(prev_w["avg_volume"], 1)
-                        if vol_ratio > 1.5:
-                            status = "✅ 放量上涨"
-                        elif vol_ratio > 1.2:
-                            status = "✅ 温和放量"
-                        elif vol_ratio > 1.0:
-                            status = "⚠️ 持平"
-                        else:
-                            status = "❌ 缩量"
-                    else:
-                        status = "✅"
-                else:
-                    status = "✅"
+        display_waves = waves[display_start:]
+        lines.append(f'  近{lookback}日涨跌波段（共{len(display_waves)}个）：')
+        lines.append('')
+
+        # ── 构建评分标注 ───────────────────────────────────
+        scored_ups = up_waves[start_u_idx:]
+        scored_downs = down_waves[start_u_idx + 1:]  # 跳过 d0、d2（第一个不评分），从 d4 开始评分对比
+
+        # 波段索引映射（scored_index -> wave_index）
+        up_to_wi = {}
+        ui = 0
+        for wi, w in enumerate(waves):
+            if w.direction == 'up':
+                if ui >= start_u_idx:
+                    up_to_wi[ui - start_u_idx] = wi
+                ui += 1
+
+        # 下跌标注：d2 不评分只标注，d4/d6/... 从 scored_downs 中取
+        down_to_wi = {}
+        di = 0
+        for wi, w in enumerate(waves):
+            if w.direction == 'down':
+                down_to_wi[di] = wi
+                di += 1
+
+        # 生成标注文本
+        annotations = {}
+
+        def _up_label(si):
+            return f'u{si*2+1}'
+        def _down_label(si):
+            return f'd{si*2+2}'
+
+        for si, su in enumerate(scored_ups):
+            lbl_curr = _up_label(si)
+            wi = up_to_wi[si]
+            if si == 0:
+                annotations[wi] = f'{lbl_curr}:'
+            elif si == 1:
+                prev = scored_ups[0]
+                annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) > {_up_label(0)}({prev.wave_high:.2f}) → +2'
             else:
-                # 跌段：找前一个涨段做对比
-                if j > 0:
-                    prev_w = waves[j - 1]
-                    if prev_w["direction"] == "up":
-                        vol_ratio = prev_w["avg_volume"] / max(w["avg_volume"], 1)
-                        if vol_ratio > 1.5:
-                            status = "✅ 缩量调整"
-                        elif vol_ratio > 1.2:
-                            status = "⚠️ 轻微缩量"
-                        elif vol_ratio > 1.0:
-                            status = "⚠️ 量能持平"
-                        else:
-                            status = "❌ 放量下跌"
-                    else:
-                        status = "⚠️"
-                else:
-                    status = "⚠️"
+                prev = scored_ups[si-1]
+                max_prior = max(s.wave_high for s in scored_ups[:si])
+                if su.wave_high > prev.wave_high and su.wave_high > max_prior:
+                    annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) > {_up_label(si-1)}({prev.wave_high:.2f}) → +8 (创历史新高)'
+                elif su.wave_high > prev.wave_high:
+                    annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) > {_up_label(si-1)}({prev.wave_high:.2f}) → +1'
+                elif su.wave_high < prev.wave_high:
+                    annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) < {_up_label(si-1)}({prev.wave_high:.2f}) → -3'
 
+        # d2 标注（不评分，只标）
+        d2_idx = down_to_wi.get(start_u_idx)  # start_u_idx=1 对应 downs[1] = d2
+        if d2_idx is not None:
+            annotations[d2_idx] = 'd2:'
+
+        # d4+ 评分（从 scored_downs 取）
+        for si, sd in enumerate(scored_downs):
+            lbl_curr = _down_label(si + 1)  # scored_downs[0] 对应 d4
+            # 在 waves 中找到这个下跌段
+            d_idx = start_u_idx + 1 + si
+            wi = down_to_wi.get(d_idx)
+            if wi is None:
+                continue
+            prev_idx = d_idx - 1
+            prev_wi = down_to_wi.get(prev_idx)
+            if prev_wi is None:
+                continue
+            prev_w = waves[prev_wi]
+            prev_low = prev_w.wave_low
+            if sd.wave_low < prev_low:
+                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) < {_down_label(si)}({prev_low:.2f}) → -1'
+            else:
+                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) >= {_down_label(si)}({prev_low:.2f}) → +0'
+
+        # ── 输出每行 ─────────────────────────────────────
+        for wi, w in enumerate(waves):
+            if wi < display_start:
+                continue
+            tag = annotations.get(wi, '')
+            dir_icon = '↑' if w.direction == 'up' else '↓'
+            start_date = str(df['date'].iloc[w.start])[:10]
+            end_date = str(df['date'].iloc[w.end])[:10]
             lines.append(
-                f"  {dir_icon} {start_date}～{end_date}  "
-                f"({w['len']:2d}天) "
-                f"均量={w['avg_volume']:>10.0f}  "
-                f"涨跌={price_str:>8}  {status}"
+                f'  {dir_icon} {start_date}～{end_date}  '
+                f'({w.days:2d}天) '
+                f'量={w.avg_volume:>10.0f}  '
+                f'爆={w.volume_power:.1f}x  '
+                f'涨跌={w.pct:+.2f}%  '
+                f'{tag}'
             )
 
-        # 关键比对结论
-        up_waves = [w for w in waves if w["direction"] == "up"]
-        down_waves = [w for w in waves if w["direction"] == "down"]
-
-        lines.append("")
-
-        # 波段质量评分详细分解
-        from scorer import _find_ascending_start
-        wq_total = score_wave_quality(waves)
-        start_u_idx = _find_ascending_start(up_waves)
-        wq_lines = []
-        # 上涨波段：跳过 start_u_idx 之前的（被丢弃的波段）
-        for i in range(start_u_idx + 1, len(up_waves)):
-            curr_h = up_waves[i]["wave_high"]
-            prev_h = up_waves[i - 1]["wave_high"]
-            lbl_curr = f"u{2*i+1}"
-            lbl_prev = f"u{2*i-1}"
-            if curr_h > prev_h:
-                if i == start_u_idx + 1:
-                    wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +2")
-                else:
-                    max_prior = max(up_waves[k]["wave_high"] for k in range(start_u_idx, i))
-                    if curr_h > max_prior:
-                        wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +8 (创历史新高)")
-                    else:
-                        wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) > {lbl_prev}({prev_h:.2f}) → +1")
-            elif curr_h < prev_h:
-                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → -3")
-            else:
-                wq_lines.append(f"      {lbl_curr}({curr_h:.2f}) < {lbl_prev}({prev_h:.2f}) → 0")
-        # 下跌波段：跳过前 start_u_idx 个
-        for i in range(max(1, start_u_idx), len(down_waves)):
-            curr_lo = down_waves[i]["wave_low"]
-            prev_lo = down_waves[i - 1]["wave_low"]
-            lbl_curr = f"d{2*i+2}"
-            lbl_prev = f"d{2*i}"
-            if curr_lo < prev_lo:
-                wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) < {lbl_prev}({prev_lo:.2f}) → -1")
-            else:
-                wq_lines.append(f"      {lbl_curr}({curr_lo:.2f}) >= {lbl_prev}({prev_lo:.2f}) → +0")
-        lines.append("")
-        lines.append(f"  📊 波段质量评分（共 {wq_total:+.1f} 分）：")
-        for wl in wq_lines:
-            lines.append(wl)
-        lines.append("")
-        if up_waves and down_waves:
-            last_up = up_waves[-1]
-            last_down = down_waves[-1]
-            ratio = last_up["avg_volume"] / max(last_down["avg_volume"], 1)
-            all_up_avg = float(np.mean([w["avg_volume"] for w in up_waves]))
-            all_down_avg = float(np.mean([w["avg_volume"] for w in down_waves]))
-            all_ratio = all_up_avg / max(all_down_avg, 1)
-
-            lines.append(f"  📊 波段量比分析：")
-            lines.append(f"    最近涨段({last_up['len']}天)均量={last_up['avg_volume']:.0f} vs "
-                        f"最近跌段({last_down['len']}天)均量={last_down['avg_volume']:.0f} → "
-                        f"比值={ratio:.2f} {'✅' if ratio > 1.2 else '❌'}")
-            lines.append(f"    全部涨段均量={all_up_avg:.0f} vs 全部跌段均量={all_down_avg:.0f} → "
-                        f"比值={all_ratio:.2f} {'✅' if all_ratio > 1.0 else '❌'}")
-            lines.append(f"    波段模式评分: {result['pattern_score']} {'✅' if result['pattern_score'] >= 0.4 else '❌'}")
+        lines.append('')
+        lines.append(f'  📊 波段质量评分（共 {score_wave_quality(waves):+.1f} 分）')
 
         # ── 综合评分明细 ──────────────────────────────────
-        # 重建完整指标以获取评分明细
-        ind_for_detail = compute_all(df)
+        ind_for_detail = compute_all(df, ma10_break_window=cfg.max_broke_ma10_days)
         if ind_for_detail:
             d = score_detail(ind_for_detail)
-            wq = score_wave_quality(waves)  # 使用和详细分解一致的波段质量评分
-            lines.append("")
-            lines.append(f"  📊 综合评分明细（总分={r['score']:.1f}）：")
-            lines.append(f"    DIF强度       {d['dif_score']:>5.1f} / 25")
-            lines.append(f"    红柱新鲜度   {d['red_score']:>5.1f} / 20")
-            lines.append(f"    量能质量     {d['turnover_score']:>5.1f} /  8（换手）")
-            lines.append(f"    量比         {d['volume_score']:>5.1f} /  5")
-            lines.append(f"    波段结构     {d['vol_structure_score']:>5.1f} /  8")
-            lines.append(f"    爆发力       {d['vol_burst_score']:>5.1f} /  4")
-            lines.append(f"    均线质量     {d['ma_score']:>5.1f} / 15")
-            lines.append(f"    回调支撑     {d['support_score']:>5.1f} /  5")
-            lines.append(f"    整理模式     {d['consolidation_score']:>5.1f} / 10")
-            lines.append(f"    波段质量     {wq:>+6.1f}")
+            wq = score_wave_quality(waves)
+            lines.append('')
+            lines.append(f'  📊 综合评分明细（总分={r["score"]:.1f}）：')
+            lines.append(f'    DIF强度       {d["dif_score"]:>5.1f} / 25')
+            lines.append(f'    红柱新鲜度   {d["red_score"]:>5.1f} / 20')
+            lines.append(f'    量能质量     {d["turnover_score"]:>5.1f} /  8（换手）')
+            lines.append(f'    量比         {d["volume_score"]:>5.1f} /  5')
+            lines.append(f'    波段结构     {d["vol_structure_score"]:>5.1f} /  8')
+            lines.append(f'    爆发力       {d["vol_burst_score"]:>5.1f} /  4')
+            lines.append(f'    均线质量     {d["ma_score"]:>5.1f} / 15')
+            lines.append(f'    回调支撑     {d["support_score"]:>5.1f} /  5')
+            lines.append(f'    整理模式     {d["consolidation_score"]:>5.1f} / 10')
+            lines.append(f'    波段质量     {wq:>+6.1f}')
 
         return lines
 
@@ -490,6 +493,17 @@ if __name__ == "__main__":
         wave_quality = r.get('wave_quality_score', 0.0)
         wave_dir = r.get('wave_last_dir', 'N/A')
         ma5_d = r.get('ma5_distance_pct', 0.0)
+        strong = r.get('up_stronger_than_down', False)
+        main_trend = r.get('is_main_trend', False)
+        second_break = r.get('is_second_break', False)
+        structure_reason = r.get('structure_reason', '')
+        strong_mark = '🔥' if strong else '⚠️'
+        # 主升浪+二级启动挂额外标签
+        extra = ''
+        if main_trend:
+            extra += '🏆'
+        if second_break:
+            extra += '🔄'
         print(f"  {i:2d}. {r['code']} {r['name']:<6} "
               f"评分{r['score']:>5.1f}  "
               f"3日{r['gain3']:>+6.2f}%  "
@@ -497,4 +511,7 @@ if __name__ == "__main__":
               f"波量比{wave_ratio:.2f}({wave_dir})  "
               f"波评分{wave_quality:+.1f}  "
               f"MA5距{ma5_d:>+5.1f}%  "
+              f"{strong_mark}{extra}  "
+              f"{structure_reason}  "
+              f"[{r.get('phase', '不明')}]  "
               f"止损{sl}")

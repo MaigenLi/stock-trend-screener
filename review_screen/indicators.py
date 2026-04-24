@@ -174,52 +174,91 @@ def detect_volume_price_wave(
         w["price_change"] = (close[e] / close[s] - 1) * 100 if close[s] > 0 else 0.0
         w["wave_high"] = float(np.max(high_arr[s:e + 1]))
         w["wave_low"] = float(np.min(low_arr[s:e + 1]))
+        # 量能爆发力：波段内最大量 / 波段前5日均量
+        max_vol = float(np.max(volume[s:e + 1]))
+        prev_avg = float(np.mean(volume[max(s - 5, 0):s])) if s > 0 else 1.0
+        w["volume_power"] = max_vol / max(prev_avg, 1.0)
 
-    # ── Step 4: 分离涨段和跌段 ────────────────────────────────
-    up_waves = [w for w in waves if w["direction"] == "up"]
-    down_waves = [w for w in waves if w["direction"] == "down"]
+    # ── 转换为 Wave 数据结构 ────────────────────────────────
+    from structure_analyzer import Wave as WaveObj
+    wave_objects = [
+        WaveObj(
+            start=w["start_idx"], end=w["end_idx"],
+            direction=w["direction"],
+            pct=w["price_change"], days=w["len"],
+            avg_volume=w["avg_volume"],
+            volume_power=w.get("volume_power", 0.0),
+            wave_high=w["wave_high"], wave_low=w["wave_low"],
+        )
+        for w in waves
+    ]
+    up_waves = [w for w in wave_objects if w.direction == "up"]
+    down_waves = [w for w in wave_objects if w.direction == "down"]
 
     if not up_waves or not down_waves:
         return {
             "recent_up_gt_down": False,
             "up_vs_down_ratio": 0.0,
             "all_up_gt_down": False,
-            "wave_count": len(waves),
-            "last_wave_dir": waves[-1]["direction"] if waves else None,
+            "wave_count": len(wave_objects),
+            "last_wave_dir": wave_objects[-1].direction if wave_objects else None,
             "pattern_score": 0.0,
-            "waves": waves,
+            "waves": wave_objects,
+            "structure_result": None,
         }
 
-    # ── Step 5: 最近一个完整涨段 vs 最近一个完整跌段 ────────────
+    # ── Step 4: 量能对比 ────────────────────────────────────
     last_up = up_waves[-1]
     last_down = down_waves[-1]
+    recent_up_gt_down = last_up.avg_volume > last_down.avg_volume
+    up_vs_down_ratio = last_up.avg_volume / max(last_down.avg_volume, 1.0)
 
-    recent_up_gt_down = last_up["avg_volume"] > last_down["avg_volume"]
-    up_vs_down_ratio = last_up["avg_volume"] / max(last_down["avg_volume"], 1.0)
-
-    # 全部涨段 vs 全部跌段
-    all_up_avg = float(np.mean([w["avg_volume"] for w in up_waves]))
-    all_down_avg = float(np.mean([w["avg_volume"] for w in down_waves]))
+    all_up_avg = float(np.mean([w.avg_volume for w in up_waves]))
+    all_down_avg = float(np.mean([w.avg_volume for w in down_waves]))
     all_up_gt_down = all_up_avg > all_down_avg
+
+    # ── Step 5: 结构分析（复用 structure_analyzer）──────────────
+    from structure_analyzer import analyze_structure
+    result = analyze_structure(up_waves, down_waves)
 
     # ── Step 6: 模式评分 ──────────────────────────────────────
     score = 0.0
     if recent_up_gt_down:
-        score += 0.4
+        score += 0.25     # 涨段放量
     if all_up_gt_down:
-        score += 0.3
-    if waves and waves[-1]["direction"] == "up":
-        score += 0.3
+        score += 0.20     # 长期量价健康
+    if wave_objects and wave_objects[-1].direction == "up":
+        score += 0.05     # 趋势延续中
+    if result and result.is_strong:
+        score += 0.30     # 涨得多跌得少
+    if result and result.up_speed > result.down_speed:
+        score += 0.20     # 涨效率 > 跌效率
 
     return {
         "recent_up_gt_down": recent_up_gt_down,
         "up_vs_down_ratio": round(up_vs_down_ratio, 2),
         "all_up_gt_down": all_up_gt_down,
-        "wave_count": len(waves),
-        "last_wave_dir": waves[-1]["direction"],
+        "wave_count": len(wave_objects),
+        "last_wave_dir": wave_objects[-1].direction if wave_objects else None,
+        # 涨跌幅强弱
+        "up_stronger_than_down": result.is_strong if result else False,
+        "up_down_ratio": result.strength_ratio if result else 0.0,
+        # 主升浪 / 二次启动
+        "is_main_trend": result.is_main_trend if result else False,
+        "is_second_break": result.is_second_break if result else False,
+        # 结构评分与说明
+        "structure_score": result.score if result else 0.0,
+        "structure_reason": result.reason if result else "数据不足",
+        # 效率指标
+        "up_efficiency": last_up.speed if last_up else 0.0,
+        "down_efficiency": last_down.speed if last_down else 0.0,
+        "efficiency_ratio": round(last_up.speed / max(last_down.speed, 0.01), 2) if (last_up and last_down) else 0.0,
+        # 综合评分
         "pattern_score": round(score, 2),
-        "waves": waves,
+        "structure_result": result,
+        "waves": wave_objects,
     }
+
 def compute_volume_metrics(
     volume: np.ndarray,
     amount: np.ndarray,
@@ -232,7 +271,7 @@ def compute_volume_metrics(
     Returns:
         vol_ratio: 当日量比（当日成交量 / 5日均成交量）
         vol_trend: 5日均量 / 20日均量（量能中期趋势）
-        turnover: 换手率估算（成交量/成交额 × 100）
+        turnover_est: 当日换手率（AkShare的turnover列本身已是%，无需×100）
         vol_up_days_ratio: 近5日上涨日占比
         vol_up_vs_down: 近5日涨时均量 / 跌时均量
         vol_consec_strong: 连续放量天数（近5日中量比>1.0的天数）
@@ -244,16 +283,17 @@ def compute_volume_metrics(
     vol_5_prior = np.nanmean(volume[-8:-3]) if len(volume) >= 8 else vol_5
     vol_ratio = float(volume[-1] / vol_5) if vol_5 > 0 else 0.0
     vol_trend = float(vol_5 / vol_20) if vol_20 > 0 else 0.0
-    # 换手率：AkShare的turnover列直接是百分比，无需再×100
+    # 当日换手率：AkShare的turnover列本身已是%（如2.5=2.5%），无需×100
     if turnover_true is not None and len(turnover_true) == len(volume):
-        turnover_est = float(turnover_true[-1])  # 直接是百分比
+        turnover_est = float(turnover_true[-1])
     else:
+        # 备用估算（量纲：成交量/流通股本×100）
         amt_5 = np.nanmean(amount[-5:]) if len(amount) >= 5 else np.nanmean(amount)
         turnover_est = float(volume[-1] / amt_5 * 100) if amt_5 > 0 else 0.0
 
     # 近5日均换手率
     if turnover_true is not None and len(turnover_true) >= 5:
-        avg_turnover_5 = float(np.nanmean(turnover_true[-5:]))  # 直接是百分比
+        avg_turnover_5 = float(np.nanmean(turnover_true[-5:]))
     else:
         avg_turnover_5 = turnover_est
 
@@ -331,7 +371,7 @@ def count_red_days(macd: np.ndarray, idx: int) -> int:
     return count
 
 
-def compute_all(df: pd.DataFrame) -> dict:
+def compute_all(df: pd.DataFrame, ma10_break_window: int = 3) -> dict:
     """
     计算单只股票全部指标（基于最新一根K线）
 
@@ -398,10 +438,10 @@ def compute_all(df: pd.DataFrame) -> dict:
             if low_near[i] < ma[5][i]:
                 broke_ma5_recently = True
                 break
-    # 最近是否曾跌破10日线（超过1天）
+    # 最近 N 天是否曾跌破10日线（超过1天）
     broke_ma10_count = 0
-    if idx >= 3:
-        for i in range(idx - 2, idx + 1):
+    if idx >= ma10_break_window:
+        for i in range(idx - ma10_break_window + 1, idx + 1):
             if low_near[i] < ma[10][i]:
                 broke_ma10_count += 1
 
@@ -473,6 +513,17 @@ def compute_all(df: pd.DataFrame) -> dict:
         "wave_recent_up_gt_down": wave_pattern["recent_up_gt_down"],
         "wave_up_vs_down_ratio": wave_pattern["up_vs_down_ratio"],
         "wave_all_up_gt_down": wave_pattern["all_up_gt_down"],
+        # 涨跌幅强弱（从 structure_analyzer 来）
+        "up_stronger_than_down": wave_pattern.get("up_stronger_than_down", False),
+        "up_down_ratio": wave_pattern.get("up_down_ratio", 0.0),
+        # 主升浪 / 二次启动
+        "is_main_trend": wave_pattern.get("is_main_trend", False),
+        "is_second_break": wave_pattern.get("is_second_break", False),
+        "structure_score": wave_pattern.get("structure_score", 0.0),
+        "structure_reason": wave_pattern.get("structure_reason", ""),
+        "up_efficiency": wave_pattern.get("up_efficiency", 0.0),
+        "down_efficiency": wave_pattern.get("down_efficiency", 0.0),
+        "efficiency_ratio": wave_pattern.get("efficiency_ratio", 0.0),
         "wave_count": wave_pattern["wave_count"],
         "wave_last_dir": wave_pattern["last_wave_dir"],
         # 止损参考
@@ -487,6 +538,6 @@ def compute_all(df: pd.DataFrame) -> dict:
         "waves": wave_pattern["waves"],
         "_ma20": ma20_arr,
         "_ma60": ma60_arr,
-        "_turnover": turnover_true * 100.0,  # 换手率数组（%）
+        "_turnover": turnover_true,  # 换手率数组（AkShare的turnover列本身就是百分比，如2.5=2.5%）
         "_dates": df["date"].values,
     }
