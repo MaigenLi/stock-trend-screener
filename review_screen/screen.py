@@ -372,48 +372,63 @@ if __name__ == "__main__":
         def _down_label(si):
             return f'd{si*2+2}'
 
-        for si, su in enumerate(scored_ups):
-            lbl_curr = _up_label(si)
-            wi = up_to_wi[si]
-            if si == 0:
-                annotations[wi] = f'{lbl_curr}:'
-            elif si == 1:
-                prev = scored_ups[0]
-                annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) > {_up_label(0)}({prev.wave_high:.2f}) → +2'
-            else:
-                prev = scored_ups[si-1]
-                max_prior = max(s.wave_high for s in scored_ups[:si])
-                if su.wave_high > prev.wave_high and su.wave_high > max_prior:
-                    annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) > {_up_label(si-1)}({prev.wave_high:.2f}) → +8 (创历史新高)'
-                elif su.wave_high > prev.wave_high:
-                    annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) > {_up_label(si-1)}({prev.wave_high:.2f}) → +1'
-                elif su.wave_high < prev.wave_high:
-                    annotations[wi] = f'{lbl_curr}: {lbl_curr}({su.wave_high:.2f}) < {_up_label(si-1)}({prev.wave_high:.2f}) → -3'
+        # ── 构建 display_start 之后波段的全局标注 ───────────────────────
+        # display_idx=0→u1, display_idx=1→d2, display_idx=2→u3, ...
+        display_up_count = 0   # u1/u3/u5 的枚举
+        display_down_count = 0 # d2/d4/d6 的枚举
+        scored_up_idx = 0      # 在 scored_ups 中的位置
+        scored_down_idx = 0     # 在 scored_downs 中的位置
 
-        # d2 标注（不评分，只标）
-        d2_idx = down_to_wi.get(start_u_idx)  # start_u_idx=1 对应 downs[1] = d2
-        if d2_idx is not None:
-            annotations[d2_idx] = 'd2:'
-
-        # d4+ 评分（从 scored_downs 取）
-        for si, sd in enumerate(scored_downs):
-            # lbl_curr: scored_downs[0]=d4, scored_downs[1]=d6, ...
-            d_idx = start_u_idx + 1 + si  # waves 中的下跌索引
-            lbl_curr = _down_label(d_idx)  # d_idx=1→d4, d_idx=2→d6, ...
-            # 在 waves 中找到这个下跌段
-            wi = down_to_wi.get(d_idx)
-            if wi is None:
+        for wi, w in enumerate(waves):
+            if wi < display_start:
                 continue
-            prev_idx = d_idx - 1
-            prev_wi = down_to_wi.get(prev_idx)
-            if prev_wi is None:
-                continue
-            prev_w = waves[prev_wi]
-            prev_low = prev_w.wave_low
-            if sd.wave_low < prev_low:
-                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) < {_down_label(prev_idx)}({prev_low:.2f}) → -1'
-            else:
-                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) >= {_down_label(prev_idx)}({prev_low:.2f}) → +0'
+            if w.direction == 'up':
+                lbl = _up_label(display_up_count)
+                display_up_count += 1
+                if scored_up_idx < len(scored_ups) and scored_ups[scored_up_idx] is w:
+                    si = scored_up_idx
+                    if si == 0:
+                        annotations[wi] = f'{lbl}:'
+                    elif si == 1:
+                        prev = scored_ups[0]
+                        annotations[wi] = f'{lbl}: {lbl}({w.wave_high:.2f}) > {_up_label(0)}({prev.wave_high:.2f}) → +2'
+                    else:
+                        prev = scored_ups[si-1]
+                        max_prior = max(s.wave_high for s in scored_ups[:si])
+                        if w.wave_high > prev.wave_high and w.wave_high > max_prior:
+                            annotations[wi] = f'{lbl}: {lbl}({w.wave_high:.2f}) > {_up_label(si-1)}({prev.wave_high:.2f}) → +8 (创历史新高)'
+                        elif w.wave_high > prev.wave_high:
+                            annotations[wi] = f'{lbl}: {lbl}({w.wave_high:.2f}) > {_up_label(si-1)}({prev.wave_high:.2f}) → +1'
+                        else:
+                            annotations[wi] = f'{lbl}: {lbl}({w.wave_high:.2f}) < {_up_label(si-1)}({prev.wave_high:.2f}) → -3'
+                    scored_up_idx += 1
+                else:
+                    annotations[wi] = f'{lbl}:'
+            else:  # down
+                lbl = _down_label(display_down_count)
+                display_down_count += 1
+                if scored_down_idx < len(scored_downs) and scored_downs[scored_down_idx] is w:
+                    # 有评分的下跌波段（d4+）
+                    # 找前一个同向波段（上一个下跌波段）用于对比
+                    di_global = display_down_count - 1  # 当前下跌在显示序列中的 di
+                    prev_wi = None
+                    for pw_i in range(wi - 1, display_start - 1, -1):
+                        if waves[pw_i].direction == 'down':
+                            prev_wi = pw_i
+                            break
+                    if prev_wi is not None:
+                        prev_w = waves[prev_wi]
+                        prev_lbl = _down_label(display_down_count - 2)  # 前一个下跌的标签
+                        if w.wave_low < prev_w.wave_low:
+                            annotations[wi] = f'{lbl}: {lbl}({w.wave_low:.2f}) < {prev_lbl}({prev_w.wave_low:.2f}) → -1'
+                        else:
+                            annotations[wi] = f'{lbl}: {lbl}({w.wave_low:.2f}) >= {prev_lbl}({prev_w.wave_low:.2f}) → +0'
+                    else:
+                        annotations[wi] = f'{lbl}:'
+                    scored_down_idx += 1
+                else:
+                    # d2 等不参与评分的下跌波段
+                    annotations[wi] = f'{lbl}:'
 
         # ── 输出每行 ─────────────────────────────────────
         for wi, w in enumerate(waves):
