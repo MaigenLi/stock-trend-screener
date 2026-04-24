@@ -247,6 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--waves", action="store_true", help="显示完整涨跌波段详情")
     parser.add_argument("--latest-wave-down", action="store_true", help="只选当前处于下跌波段的股票（蓄势找买点）")
     parser.add_argument("--reason", action="store_true", help="显示未通过股票的原因")
+    parser.add_argument("--days", type=int, default=1, help="持续多少天（默认1天）")
     args = parser.parse_args()
 
     # 解析日期
@@ -256,14 +257,9 @@ if __name__ == "__main__":
         print(f"❌ 日期格式错误: {args.date}，应为 YYYY-MM-DD")
         sys.exit(1)
 
-    print(f"\n📅 复盘选股: {args.date}")
-    date_str = args.date
-
-    # 输出路径
-    output_path = Path(args.output) if args.output else Path.home() / "stock_reports" / f"review_screen_{date_str}.txt"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 股票范围
+    # ─────────────────────────────────────────
+    # 股票范围 + 筛选配置（多日和单日都要用，提前定义）
+    # ─────────────────────────────────────────
     if args.codes:
         codes = args.codes
         print(f"\n📊 筛选（指定 {len(codes)} 只）")
@@ -271,22 +267,82 @@ if __name__ == "__main__":
         codes = preload_all_codes()
         print(f"\n📊 筛选（全市场 {len(codes)} 只）")
 
-    # 构建筛选配置
     cfg = FilterConfig(
         require_latest_wave_down=args.latest_wave_down,
     )
 
-    # 扫描
-    results = scan_market(
-        codes=codes,
-        target_date=target_date,
-        max_workers=args.workers,
-        cfg=cfg,
-        return_failed=args.reason,
-    )
+    date_str = args.date
+    # ─────────────────────────────────────────
+    # 多日持续模式
+    # ─────────────────────────────────────────
+    if args.days > 1:
+        import akshare as ak
+        trade_df = ak.tool_trade_date_hist_sina()
+        all_trade_dates = pd.to_datetime(trade_df['trade_date']).dt.strftime('%Y-%m-%d').tolist()
+        date_str = args.date
+        if date_str not in all_trade_dates:
+            print(f"❌ {date_str} 不是交易日，请使用正确的 YYYY-MM-DD 格式")
+            sys.exit(1)
+        start_idx = all_trade_dates.index(date_str)
+        consecutive_dates = all_trade_dates[start_idx:start_idx + args.days]
+        if len(consecutive_dates) < args.days:
+            print(f"❌ 起始日期后不足 {args.days} 个交易日")
+            sys.exit(1)
+        print(f"\n📅 复盘选股: {args.date} × {args.days} 天持续筛选")
+        print(f"📆 交易日: {' / '.join(consecutive_dates)}")
 
-    # --reason 时过滤掉失败的结果继续显示通过列表
-    passed_results = [r for r in results if not r.get("failed", False)]
+        # ── 每日扫描 ───────────────────────────────
+        daily_passed = {}  # date_str -> list of passed results
+        for day_str in consecutive_dates:
+            day_dt = datetime.strptime(day_str, "%Y-%m-%d")
+            day_results = scan_market(
+                codes=codes,
+                target_date=day_dt,
+                max_workers=args.workers,
+                cfg=cfg,
+                return_failed=False,
+            )
+            day_passed = [r for r in day_results if not r.get("failed", False)]
+            daily_passed[day_str] = day_passed
+            print(f"  {day_str}: {len(day_passed)} 只通过")
+
+        # ── 找交集：连续 N 天都通过的股票 ─────────────────
+        if not daily_passed:
+            print("\n⚠️  所有日期均无通过股票")
+            sys.exit(0)
+        # 交集：以第一天的代码为基准，筛出每天都有结果的
+        base_set = {r['code']: r for r in daily_passed[consecutive_dates[0]]}
+        for day_str in consecutive_dates[1:]:
+            day_codes = {r['code'] for r in daily_passed[day_str]}
+            base_set = {c: r for c, r in base_set.items() if c in day_codes}
+
+        intersection_results = list(base_set.values())
+        print(f"\n🎯 连续 {args.days} 天都通过: {len(intersection_results)} 只")
+        intersection_results.sort(key=lambda x: x["score"], reverse=True)
+
+        # 覆盖后续使用的变量
+        passed_results = intersection_results
+        date_str = f"{args.date}～{consecutive_dates[-1]}"
+        target_date = datetime.strptime(consecutive_dates[-1], "%Y-%m-%d")
+
+    print(f"\n📅 复盘选股: {date_str}")
+    date_str_display = date_str
+
+    # 输出路径
+    output_path = Path(args.output) if args.output else Path.home() / "stock_reports" / f"review_screen_{date_str}.txt"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 单日扫描（--days=1 或未指定时）
+    if args.days <= 1:
+        target_date = datetime.strptime(args.date, "%Y-%m-%d")
+        results = scan_market(
+            codes=codes,
+            target_date=target_date,
+            max_workers=args.workers,
+            cfg=cfg,
+            return_failed=args.reason,
+        )
+        passed_results = [r for r in results if not r.get("failed", False)]
 
     if not passed_results and not args.reason:
         print("\n⚠️  无符合筛选条件的股票")
