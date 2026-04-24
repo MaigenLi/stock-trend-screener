@@ -61,9 +61,25 @@ def detect_volume_price_wave(
         waves:              波段详情列表
     """
     n = min(lookback, len(close) - 1)
-    scan_start = len(close) - n  # 实际扫描起始索引
+    
+    # ── Step 0: 截断到最近连续健康区间 ──────────────────────────
+    # 从最新日期往回扫，找到最近一个不满足 close>ma20>ma60 的日期
+    # 从那个日期的后一天开始识别波段
+    scan_start = len(close) - n
+    if len(close) >= 60:
+        ma20_arr = pd.Series(close).rolling(20, min_periods=1).mean().values
+        ma60_arr = pd.Series(close).rolling(60, min_periods=1).mean().values
+        for i in range(len(close) - 1, max(scan_start, 59) - 1, -1):
+            ok = (close[i] > ma20_arr[i] > ma60_arr[i] and
+                  not (np.isnan(ma20_arr[i]) or np.isnan(ma60_arr[i])))
+            if not ok:
+                scan_start = max(i + 1, scan_start)
+                break
+        # 确保窗口至少有30根K线
+        if len(close) - scan_start < 30:
+            scan_start = len(close) - n
 
-    if n < 5:
+    if n < 5 or len(close) - scan_start < 5:
         return {
             "recent_up_gt_down": False,
             "up_vs_down_ratio": 0.0,
@@ -159,6 +175,41 @@ def detect_volume_price_wave(
         "direction": current_dir,
     })
 
+    # ── Step 2.5: 噪声过滤 ──────────────────────────────────
+    # 2天波段且|涨跌幅|<2% → 视为噪声，合并到前一波段
+    # 注意：合并前的涨跌幅按波段内计算来确定是否为噪声
+    if len(waves) >= 3:
+        merged = []
+        for w in waves:
+            s, e = w["start_idx"], w["end_idx"]
+            days = e - s + 1
+            # 计算波段内涨跌幅（用于噪声判定）
+            if days == 2:
+                inner_pct = abs((close[e] / close[s] - 1) * 100)
+            else:
+                inner_pct = 999.0  # 非2天不可能是噪声
+            if days == 2 and inner_pct < 2.0:
+                # 噪声！合并到前一个波段
+                if merged:
+                    merged[-1]["end_idx"] = e
+                else:
+                    w["len"] = days  # 第一条保留
+                    merged.append(w)
+            else:
+                merged.append(w)
+        waves = merged
+
+    # 合并连续同向波段（噪声过滤可能导致中间方向波段被吃）
+    if len(waves) >= 2:
+        merged2 = [waves[0]]
+        for w in waves[1:]:
+            if w["direction"] == merged2[-1]["direction"]:
+                # 同向合并
+                merged2[-1]["end_idx"] = w["end_idx"]
+            else:
+                merged2.append(w)
+        waves = merged2
+
     if len(waves) < 2:
         return {
             "recent_up_gt_down": False,
@@ -173,11 +224,19 @@ def detect_volume_price_wave(
     # ── Step 3: 计算每个波段的均量、涨跌幅、高低点 ──────────────────
     high_arr = high if high is not None else close
     low_arr = low if low is not None else close
-    for w in waves:
+    for i, w in enumerate(waves):
         s, e = w["start_idx"], w["end_idx"]
         w["len"] = e - s + 1
         w["avg_volume"] = float(np.mean(volume[s:e + 1]))
-        w["price_change"] = (close[e] / close[s] - 1) * 100 if close[s] > 0 else 0.0
+        # 涨跌幅定义（统一口径）：
+        # - 从上一波段终点收盘价到本波段终点收盘价
+        # - 第一个波段无前波段可比较，用波段内涨跌幅
+        if i > 0:
+            prev_end = waves[i - 1]["end_idx"]
+            prev_close = close[prev_end]
+            w["price_change"] = (close[e] / prev_close - 1) * 100 if prev_close > 0 else 0.0
+        else:
+            w["price_change"] = (close[e] / close[s] - 1) * 100 if close[s] > 0 else 0.0
         w["wave_high"] = float(np.max(high_arr[s:e + 1]))
         w["wave_low"] = float(np.min(low_arr[s:e + 1]))
         # 量能爆发力:波段内最大量 / 波段前5日均量

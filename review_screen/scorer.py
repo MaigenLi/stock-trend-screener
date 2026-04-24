@@ -65,10 +65,10 @@ def score_wave_quality(waves: list) -> float:
             score -= 3.0
 
     # ── 下跌波段 ─────────────────────────────────────────────
-    d_start = start_u_idx + 1
+    d_start = start_u_idx
     for i in range(d_start, len(downs)):
         curr_lo = w_get(downs[i], "wave_low")
-        prev_lo = w_get(downs[i - 1], "wave_low")
+        prev_lo = w_get(downs[i - 1], "wave_low") if i > 0 else curr_lo
         if curr_lo < prev_lo:
             score -= 1.0
 

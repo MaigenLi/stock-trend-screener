@@ -115,7 +115,8 @@ def get_stock_name(code: str, names: dict) -> str:
 # 单股评估
 # ─────────────────────────────────────────
 
-def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig, names: dict) -> dict | None:
+def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig, names: dict,
+                return_failed: bool = False) -> dict | None:
     """
     评估单只股票
 
@@ -124,31 +125,40 @@ def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig, n
         target_date: 信号日期
         cfg: 筛选配置
         names: 股票名称映射（由 scan_market 加载一次后传入）
+        return_failed: 不过时也返回带原因的结果
 
     Returns:
-        完整结果字典 或 None（不通过筛选）
+        完整结果字典 或 None（不通过筛选且 return_failed=False）
     """
     c = normalize_code(code)
     end_str = target_date.strftime("%Y-%m-%d") if target_date else None
 
     df = load_qfq_history(c, end_date=end_str, refresh=False)
     if df is None or df.empty:
+        if return_failed:
+            return {"code": c, "name": get_stock_name(c, names), "failed": True, "reason": "无数据"}
         return None
 
     # 按日期截取
     if target_date is not None:
         df = df[df["date"] <= pd.Timestamp(target_date.date())].reset_index(drop=True)
     if len(df) < cfg.min_bars:
+        if return_failed:
+            return {"code": c, "name": get_stock_name(c, names), "failed": True, "reason": f"数据仅{len(df)}天<{cfg.min_bars}天"}
         return None
 
     # 计算指标（使用配置中的窗口参数）
     ind = compute_all(df, ma10_break_window=cfg.max_broke_ma10_days)
     if not ind:
+        if return_failed:
+            return {"code": c, "name": get_stock_name(c, names), "failed": True, "reason": "指标计算失败"}
         return None
 
     # 筛选
     passed, reason = check_filters(ind, cfg)
     if not passed:
+        if return_failed:
+            return {"code": c, "name": get_stock_name(c, names), "failed": True, "reason": reason}
         return None
 
     # 评分
@@ -176,6 +186,7 @@ def scan_market(
     target_date: datetime | None,
     max_workers: int = DEFAULT_WORKERS,
     cfg: FilterConfig | None = None,
+    return_failed: bool = False,
 ) -> list[dict]:
     """多线程扫描全市场"""
     if cfg is None:
@@ -188,7 +199,7 @@ def scan_market(
     names = load_stock_names()
 
     def work(code: str) -> dict | None:
-        return evaluate_stock(code, target_date, cfg, names)
+        return evaluate_stock(code, target_date, cfg, names, return_failed=return_failed)
 
     done = [0]
 
@@ -212,7 +223,11 @@ def scan_market(
             if r is not None:
                 results.append(r)
 
-    print(f"✅ 扫描完成: {len(results)}/{total} 只通过，用时 {time.time()-t0:.1f}秒")
+    if return_failed:
+        failed = total - len([r for r in results if not r.get("failed", False)])
+        print(f"✅ 扫描完成: {len(results)}/{total} 只（通过{total-failed}只，拒绝{failed}只），用时{time.time()-t0:.1f}秒")
+    else:
+        print(f"✅ 扫描完成: {len(results)}/{total} 只通过，用时 {time.time()-t0:.1f}秒")
     return results
 
 
@@ -231,6 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default=None, help="输出文件路径")
     parser.add_argument("--waves", action="store_true", help="显示完整涨跌波段详情")
     parser.add_argument("--latest-wave-down", action="store_true", help="只选当前处于下跌波段的股票（蓄势找买点）")
+    parser.add_argument("--reason", action="store_true", help="显示未通过股票的原因")
     args = parser.parse_args()
 
     # 解析日期
@@ -266,14 +282,19 @@ if __name__ == "__main__":
         target_date=target_date,
         max_workers=args.workers,
         cfg=cfg,
+        return_failed=args.reason,
     )
 
-    if not results:
+    # --reason 时过滤掉失败的结果继续显示通过列表
+    passed_results = [r for r in results if not r.get("failed", False)]
+
+    if not passed_results and not args.reason:
         print("\n⚠️  无符合筛选条件的股票")
-        sys.exit(0)
+        if not args.waves:
+            sys.exit(0)
 
     # 按评分降序
-    results.sort(key=lambda x: x["score"], reverse=True)
+    passed_results.sort(key=lambda x: x["score"], reverse=True)
 
     # ─────────────────────────────────────────
     # 波段详情格式化
@@ -376,9 +397,10 @@ if __name__ == "__main__":
 
         # d4+ 评分（从 scored_downs 取）
         for si, sd in enumerate(scored_downs):
-            lbl_curr = _down_label(si + 1)  # scored_downs[0] 对应 d4
+            # lbl_curr: scored_downs[0]=d4, scored_downs[1]=d6, ...
+            d_idx = start_u_idx + 1 + si  # waves 中的下跌索引
+            lbl_curr = _down_label(d_idx)  # d_idx=1→d4, d_idx=2→d6, ...
             # 在 waves 中找到这个下跌段
-            d_idx = start_u_idx + 1 + si
             wi = down_to_wi.get(d_idx)
             if wi is None:
                 continue
@@ -389,9 +411,9 @@ if __name__ == "__main__":
             prev_w = waves[prev_wi]
             prev_low = prev_w.wave_low
             if sd.wave_low < prev_low:
-                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) < {_down_label(si)}({prev_low:.2f}) → -1'
+                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) < {_down_label(prev_idx)}({prev_low:.2f}) → -1'
             else:
-                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) >= {_down_label(si)}({prev_low:.2f}) → +0'
+                annotations[wi] = f'{lbl_curr}: {lbl_curr}({sd.wave_low:.2f}) >= {_down_label(prev_idx)}({prev_low:.2f}) → +0'
 
         # ── 输出每行 ─────────────────────────────────────
         for wi, w in enumerate(waves):
@@ -437,16 +459,16 @@ if __name__ == "__main__":
     # 输出结果
     # ─────────────────────────────────────────
     print(f"\n{'='*120}")
-    print(f"📊 复盘选股 {date_str}（共 {len(results)} 只）")
+    print(f"📊 复盘选股 {date_str}（通过 {len(passed_results)} 只）")
     print("=" * 120)
 
     header = _header_row()
     print(header)
     print("-" * 120)
 
-    lines = [f"📊 复盘选股 {date_str}（共 {len(results)} 只）", "=" * 120, header, "-" * 120]
+    lines = [f"📊 复盘选股 {date_str}（通过 {len(passed_results)} 只）", "=" * 120, header, "-" * 120]
 
-    for r in results:
+    for r in passed_results:
         ma5_dist = r.get('ma5_distance_pct', 0.0)
         wave_ratio = r.get('wave_up_vs_down_ratio', 0.0)
         sl_ref = r.get('stop_loss_ref')
@@ -471,6 +493,21 @@ if __name__ == "__main__":
     print(f"\n💾 结果已写入: {output_path}")
 
     # ─────────────────────────────────────────
+    # 拒绝原因（当 --reason 参数时）
+    # ─────────────────────────────────────────
+    if args.reason:
+        failed_results = [r for r in results if r.get("failed", False)]
+        if failed_results:
+            print(f"\n{'='*80}")
+            print(f"❌ 未通过筛选的股票（{len(failed_results)} 只）")
+            print(f"{'='*80}")
+            # 只显示前 50 只
+            for r in failed_results[:50]:
+                print(f"  {r['code']} {r['name']:<8} ✗ {r['reason']}")
+            if len(failed_results) > 50:
+                print(f"  ... 还有 {len(failed_results) - 50} 只未显示")
+
+    # ─────────────────────────────────────────
     # 波段详情（当 --waves 参数时）
     # ─────────────────────────────────────────
     if args.waves:
@@ -478,7 +515,31 @@ if __name__ == "__main__":
         print(f"📈 完整涨跌波段详情（近60日，仅Top10）")
         print(f"{'='*80}")
 
-        for i, r in enumerate(results[:10]):
+        wave_items = passed_results[:10] if passed_results else []
+        
+        # --waves --code 模式：即使不通过也显示
+        if args.codes and not wave_items:
+            from stock_trend.review_screen.data_cache import load_qfq_history
+            from stock_trend.review_screen.indicators import detect_volume_price_wave
+            for code_str in args.codes:
+                c = normalize_code(code_str)
+                df, _ = _load_df_for_waves(code_str, target_date)
+                if df is not None:
+                    # 构造一个最小结果字典
+                    close_arr = df['close'].values
+                    # 找几条关键信息
+                    name = load_stock_names().get(c or code_str, c or code_str)
+                    fake_r = {
+                        'code': c or code_str,
+                        'name': name,
+                        'score': 0.0,
+                        'red_days': 0,
+                    }
+                    wave_lines = _format_wave_analysis(fake_r, df, c or code_str)
+                    for wl in wave_lines:
+                        print(wl)
+
+        for r in wave_items:
             df, c = _load_df_for_waves(r['code'], target_date)
             if df is not None:
                 wave_lines = _format_wave_analysis(r, df, c)
@@ -487,7 +548,7 @@ if __name__ == "__main__":
 
     # Top10摘要
     print(f"\n🏆 Top10（评分/3日涨幅/换手率/波段量比/止损参考）：")
-    for i, r in enumerate(results[:10], 1):
+    for i, r in enumerate(passed_results[:10], 1):
         sl = f"{r['stop_loss_ref']:.2f}" if r.get('stop_loss_ref') else "N/A"
         wave_ratio = r.get('wave_up_vs_down_ratio', 0.0)
         wave_quality = r.get('wave_quality_score', 0.0)
