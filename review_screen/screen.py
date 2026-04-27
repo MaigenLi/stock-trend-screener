@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 import numpy as np
+import pandas as pd
 
 WORKSPACE = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
@@ -84,31 +85,15 @@ def normalize_code(code: str) -> str:
 
 
 def load_stock_names() -> dict:
-    """加载股票名称映射（兼容嵌套stocks结构）"""
-    names_file = Path.home() / "stock_code" / "results" / "all_stock_names_final.json"
-    if not names_file.exists():
-        return {}
-    import json
-    try:
-        data = json.loads(names_file.read_text(encoding="utf-8"))
-        stocks = data.get("stocks", {}) if isinstance(data, dict) else {}
-        names = {}
-        for code, info in stocks.items():
-            if not isinstance(info, dict):
-                continue
-            name = info.get("name", "未知")
-            names[code.lower()] = name
-            pure = info.get("code", "")
-            if pure:
-                names[pure.lower()] = name
-        return names
-    except Exception:
-        return {}
+    """加载股票名称映射（复用 gain_turnover）"""
+    from stock_trend.gain_turnover import load_stock_names as _load
+    return _load()
 
 
 def get_stock_name(code: str, names: dict) -> str:
-    """获取股票名称"""
-    return names.get(code, names.get(code[2:], ""))
+    """获取股票名称（复用 gain_turnover）"""
+    from stock_trend.gain_turnover import get_stock_name as _get
+    return _get(code, names)
 
 
 # ─────────────────────────────────────────
@@ -154,23 +139,23 @@ def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig, n
             return {"code": c, "name": get_stock_name(c, names), "failed": True, "reason": "指标计算失败"}
         return None
 
-    # 筛选
-    passed, reason = check_filters(ind, cfg)
+    # 筛选（软扣分：非核心条件不达标不拒绝，扣减总分）
+    passed, reason, soft_penalty = check_filters(ind, cfg)
     if not passed:
         if return_failed:
             return {"code": c, "name": get_stock_name(c, names), "failed": True, "reason": reason}
         return None
 
-    # 评分
-    total_score = score_stock(ind)
+    # 评分（软扣分从总分中扣除）
+    total_score = score_stock(ind) - soft_penalty
     ind["wave_quality_score"] = score_wave_quality(ind.get("waves", []))
     ind["code"] = c
     ind["name"] = get_stock_name(c, names)
-    ind["score"] = total_score
+    ind["score"] = max(total_score, 0)
     ind["_reason"] = reason
 
-    # 阶段标签
-    phase, phase_reason = classify_phase(ind)
+    # 阶段标签（基于筛选结果和质量评分综合判断）
+    phase, phase_reason = classify_phase(ind, filter_passed=True, soft_penalty=soft_penalty)
     ind["phase"] = phase
     ind["phase_reason"] = phase_reason
 
@@ -180,6 +165,36 @@ def evaluate_stock(code: str, target_date: datetime | None, cfg: FilterConfig, n
 # ─────────────────────────────────────────
 # 全市场扫描
 # ─────────────────────────────────────────
+
+# ─────────────────────────────────────────
+# 市场环境检测
+# ─────────────────────────────────────────
+
+def _detect_market_mode(target_date: datetime | None) -> bool:
+    """
+    检测市场环境：大盘是否在熊市（HS300 < MA20）
+    Returns: True = 熊市（需提高选股门槛），False = 正常/牛市
+    """
+    try:
+        import akshare as ak
+        symbol = "sh000300"  # 沪深300
+        df_index = ak.stock_zh_index_daily(symbol=symbol)
+        if df_index is None or df_index.empty:
+            return False
+        df_index["date"] = pd.to_datetime(df_index["date"])
+        if target_date is not None:
+            df_index = df_index[df_index["date"] <= pd.Timestamp(target_date.date())].reset_index(drop=True)
+        if len(df_index) < 25:
+            return False
+        close = df_index["close"].values
+        ma20 = float(pd.Series(close).rolling(20).mean().iloc[-1])
+        latest_close = float(close[-1])
+        is_bear = latest_close < ma20
+        print(f"  📈 大盘环境: HS300={latest_close:.2f} MA20={ma20:.2f} → {'🐻 熊市' if is_bear else '🐂 正常'}")
+        return is_bear
+    except Exception:
+        return False
+
 
 def scan_market(
     codes: list,
@@ -194,6 +209,14 @@ def scan_market(
     results = []
     t0 = time.time()
     total = len(codes)
+
+    # ── 市场环境检测：熊市时提高选股门槛 ─────────────────────────
+    market_bear = _detect_market_mode(target_date)
+    if market_bear:
+        # 熊市：要求更高动能，min_gain5 从 3% 提到 5%
+        original_min_gain5 = cfg.min_gain5
+        cfg.min_gain5 = max(cfg.min_gain5, 5.0)
+        print(f"  ⚠️ 熊市模式：min_gain5 {original_min_gain5}% → {cfg.min_gain5}%")
 
     # 名称映射只加载一次（避免每只股票重复读文件）
     names = load_stock_names()
@@ -248,6 +271,7 @@ if __name__ == "__main__":
     parser.add_argument("--latest-wave-down", action="store_true", help="只选当前处于下跌波段的股票（蓄势找买点）")
     parser.add_argument("--reason", action="store_true", help="显示未通过股票的原因")
     parser.add_argument("--days", type=int, default=1, help="持续多少天（默认1天）")
+    parser.add_argument("--buy", action="store_true", help="买入精选：RSI未过热 + 5日涨幅合理 + 止损空间<5%")
     args = parser.parse_args()
 
     # 解析日期
@@ -647,3 +671,65 @@ if __name__ == "__main__":
               f"{structure_reason}  "
               f"[{r.get('phase', '不明')}]  "
               f"止损{sl}")
+
+    # ─────────────────────────────────────────
+    # 买入精选（当 --buy 参数时）
+    # ─────────────────────────────────────────
+    if args.buy and passed_results:
+        BUY_RSI_MAX = 72.0          # RSI 超过此值 = 过热，不选
+        BUY_GAIN5_MAX = 15.0       # 5日涨幅超过此值 = 追高，不选
+        BUY_STOP_LOSS_MAX = 5.0     # 止损空间超过此值（%），不选
+
+        buy_candidates = []
+        for r in passed_results:
+            rsi = r.get('rsi', 50)
+            gain5 = r.get('gain5', 0)
+            close = r.get('close', 0)
+            sl_ref = r.get('stop_loss_ref')
+
+            # RSI 过热过滤
+            if rsi >= BUY_RSI_MAX:
+                continue
+            # 5日涨幅过大过滤
+            if gain5 >= BUY_GAIN5_MAX:
+                continue
+            # 止损空间计算
+            if sl_ref is not None and close > 0:
+                stop_pct = (close - sl_ref) / close * 100
+                if stop_pct <= 0 or stop_pct > BUY_STOP_LOSS_MAX:
+                    continue
+            else:
+                continue  # 无止损参考则跳过
+
+            buy_candidates.append(r)
+
+        buy_candidates.sort(key=lambda x: x['score'], reverse=True)
+
+        print(f"\n{'='*120}")
+        print(f"🟢 买入精选（RSI<{BUY_RSI_MAX:.0f} + 5日涨幅<{BUY_GAIN5_MAX:.0f}% + 止损空间<{BUY_STOP_LOSS_MAX:.0f}%，共 {len(buy_candidates)} 只）")
+        print(f"{'='*120}")
+        print(f"{'代码':<10} {'名称':<8} {'评分':>6} {'5日%':>7} {'RSI':>5} {'换手%':>6} {'止损位':>8} {'止损%':>6} {'阶段':<8}")
+        print('-' * 120)
+
+        lines_buy = [f"🟢 买入精选（RSI<{BUY_RSI_MAX:.0f} + 5日涨幅<{BUY_GAIN5_MAX:.0f}% + 止损空间<{BUY_STOP_LOSS_MAX:.0f}%，共 {len(buy_candidates)} 只）",
+                     "=" * 120,
+                     f"{'代码':<10} {'名称':<8} {'评分':>6} {'5日%':>7} {'RSI':>5} {'换手%':>6} {'止损位':>8} {'止损%':>6} {'阶段':<8}",
+                     "-" * 120]
+
+        for r in buy_candidates:
+            sl_ref = r.get('stop_loss_ref')
+            close = r.get('close', 0)
+            stop_pct = (close - sl_ref) / close * 100 if sl_ref and close > 0 else 0
+            sl_str = f"{sl_ref:.2f}" if sl_ref else "N/A"
+            phase = r.get('phase', '不明')
+            print(f"{r['code']:<10} {r['name']:<8} {r['score']:>6.1f} {r['gain5']:>+7.1f}% {r['rsi']:>5.1f} {r['turnover_est']:>6.1f}% {sl_str:>8} {stop_pct:>5.1f}%  {phase}")
+            lines_buy.append(f"{r['code']:<10} {r['name']:<8} {r['score']:>6.1f} {r['gain5']:>+7.1f}% {r['rsi']:>5.1f} {r['turnover_est']:>6.1f}% {sl_str:>8} {stop_pct:>5.1f}%  {phase}")
+
+        print('=' * 120)
+        lines_buy.append('=' * 120)
+
+        # 写入同一文件（追加）
+        with open(output_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines_buy) + "\n")
+
+        print(f"\n💾 买入精选已追加写入: {output_path}")

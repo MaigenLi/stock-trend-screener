@@ -61,23 +61,9 @@ def detect_volume_price_wave(
         waves:              波段详情列表
     """
     n = min(lookback, len(close) - 1)
-    
-    # ── Step 0: 截断到最近连续健康区间 ──────────────────────────
-    # 从最新日期往回扫，找到最近一个不满足 close>ma20>ma60 的日期
-    # 从那个日期的后一天开始识别波段
+
+    # 固定锚点：lookback 窗口起点，不再使用随机局部最低点
     scan_start = len(close) - n
-    if len(close) >= 60:
-        ma20_arr = pd.Series(close).rolling(20, min_periods=1).mean().values
-        ma60_arr = pd.Series(close).rolling(60, min_periods=1).mean().values
-        for i in range(len(close) - 1, max(scan_start, 59) - 1, -1):
-            ok = (close[i] > ma20_arr[i] > ma60_arr[i] and
-                  not (np.isnan(ma20_arr[i]) or np.isnan(ma60_arr[i])))
-            if not ok:
-                scan_start = max(i + 1, scan_start)
-                break
-        # 确保窗口至少有30根K线
-        if len(close) - scan_start < 30:
-            scan_start = len(close) - n
 
     if n < 5 or len(close) - scan_start < 5:
         return {
@@ -102,13 +88,6 @@ def detect_volume_price_wave(
         else:
             raw_states.append("neutral")
 
-    # ── Step 2: 找窗口最低点作为结构锚点 ─────────────────────────
-    # 最低点一定是某下跌段的终点(或横盘低点)
-    # 从最低点之后开始识别第一组有效的连续三连(三连阳/三连阴)
-    window_close = close[scan_start:]
-    min_local = float(pd.Series(window_close).values.argmin())
-    anchor_idx = scan_start + int(min_local)  # 窗口内最低点索引
-
     def _find_next_wave_from(start: int, direction: str) -> tuple | None:
         """
         从 start 索引向前扫描,找到第一个满足连续三连的方向波段。
@@ -131,9 +110,10 @@ def detect_volume_price_wave(
                 return (i, i + 1)   # wave_start=i(第一根阳线日), wave_end=i+1
         return None
 
-    # 从锚点之后扫描:第一组三连阳 = u1 起始
+    # ── Step 2: 从固定起点 scan_start 扫描找第一组三连 ───────────────
+    # 不再使用随机锚点：固定从窗口起点开始扫描
     waves = []
-    up_res = _find_next_wave_from(anchor_idx, "up")
+    up_res = _find_next_wave_from(scan_start, "up")
     if up_res is None:
         # 找不到三连阳 → 无法构建波段
         return {
@@ -403,26 +383,15 @@ def compute_volume_metrics(
         "vol_up_days_ratio": vol_up_days_ratio,
         "vol_consec_strong": vol_consec_strong,
         "vol_recent_3": vol_recent_3,
+        "vol_ma5": float(vol_5),
+        "vol_ma60": float(np.nanmean(volume[-60:])) if len(volume) >= 60 else float(vol_5),
     }
 
 
 def compute_rsi(closes: np.ndarray, period: int = 14) -> float:
-    """RSI(Wilder平滑)"""
-    if len(closes) < period + 1:
-        return 50.0
-    delta = np.diff(closes)
-    gain = np.clip(delta, 0, None)
-    loss = np.clip(-delta, 0, None)
-    avg_g = float(gain[:period].mean())
-    avg_l = float(loss[:period].mean())
-    rs = avg_g / avg_l if avg_l > 1e-12 else 100.0
-    rsi_val = 100.0 - 100.0 / (1.0 + rs)
-    for i in range(period, len(gain)):
-        avg_g = (avg_g * 13.0 + gain[i]) / 14.0
-        avg_l = (avg_l * 13.0 + loss[i]) / 14.0
-        rs = avg_g / avg_l if avg_l > 1e-12 else 100.0
-        rsi_val = 100.0 - 100.0 / (1.0 + rs)
-    return float(rsi_val)
+    """RSI(Wilder平滑, 统一复用gain_turnover)"""
+    from stock_trend.gain_turnover import compute_rsi_scalar
+    return compute_rsi_scalar(np.asarray(closes), period)
 
 
 def count_red_days(macd: np.ndarray, idx: int) -> int:
@@ -486,6 +455,7 @@ def compute_all(df: pd.DataFrame, ma10_break_window: int = 3) -> dict:
     gain3 = (close[idx] / close[idx - 3] - 1) * 100 if close[idx - 3] > 0 else 0.0
     gain5 = (close[idx] / close[idx - 5] - 1) * 100 if close[idx - 5] > 0 else 0.0
     gain20 = (close[idx] / close[idx - 20] - 1) * 100 if close[idx - 20] > 0 else 0.0
+    low_60d = float(np.nanmin(close[max(0, idx-60):idx+1])) if idx >= 0 else float(close[idx])
 
     # ── 回调支撑检查 ───────────────────────────────────────────────
     # 收盘价距5日线的距离(%,负数表示在线下)
@@ -601,6 +571,9 @@ def compute_all(df: pd.DataFrame, ma10_break_window: int = 3) -> dict:
         "_low": low_near,
         "_idx": idx,
         "waves": wave_pattern["waves"],
+        "low_60d": low_60d,
+        "vol_ma5": vol_metrics["vol_ma5"],
+        "vol_ma60": vol_metrics["vol_ma60"],
         "_ma20": ma20_arr,
         "_ma60": ma60_arr,
         "_turnover": turnover_true,  # 换手率数组(AkShare的turnover列本身就是百分比,如2.5=2.5%)

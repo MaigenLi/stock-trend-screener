@@ -159,19 +159,73 @@ def score_stock(ind: dict) -> float:
     vu_score = wave_score * 8.0
     score += vu_score
 
-    # 3.4 近3日爆发力（0-4分）
+    # 3.4 近3日爆发力（0-3分，上限调低不鼓励追高）
     vr3 = ind.get("vol_recent_3", 1.0)
     if vr3 >= 2.0:
-        vr3_score = 4.0
+        vr3_score = 3.0  # 设上限
     elif vr3 >= 1.5:
-        vr3_score = 2.0 + (vr3 - 1.5) * (2.0 / 0.5)
+        vr3_score = 1.5 + (vr3 - 1.5) * (1.5 / 0.5)
     elif vr3 >= 1.2:
-        vr3_score = 1.0 + (vr3 - 1.2) * (1.0 / 0.3)
+        vr3_score = 0.5 + (vr3 - 1.2) * (1.0 / 0.3)
     else:
-        vr3_score = max(0, vr3 * 0.8)
+        vr3_score = max(0, vr3 * 0.5)
     score += vr3_score
 
-    # ── 4. 趋势质量（0-20分）────────────────────────
+    # ── 6. 位置评分（低位加分，高位不鼓励）───────────────────────
+    # 股价距60日低点越近 → 加分（低位建仓安全边际高）
+    low_60d = ind.get("low_60d", 0)
+    close = ind["close"]
+    if low_60d > 0:
+        gain_from_60d_low = (close / low_60d - 1) * 100
+        if gain_from_60d_low > 0:
+            position_score = max(0, 12 - gain_from_60d_low)  # 差距越小分越高
+        else:
+            position_score = 10.0  # 已经=新低
+        score += min(position_score, 10.0)
+
+    # ── 7. 相对强度（跑赢指数加分）────────────────────────────
+    # 优先使用外部计算的 relative_strength（个股20日涨幅 - 指数20日涨幅），
+    # 未提供时用 gain20 作为简单代理（市场假设横盘）
+    rel = ind.get("relative_strength", None)
+    if rel is None:
+        gain20 = ind.get("gain20", 0)
+        rel = gain20  # 个股20日涨幅本身就是最简单的相对强度（假设市场=0基准）
+    if rel > 5:
+        score += 8.0  # 明显跑赢
+    elif rel > 0:
+        score += 4.0  # 轻微跑赢
+    elif rel < -5:
+        score -= 6.0  # 明显跑输
+    elif rel < 0:
+        score -= 2.0  # 轻微跑输
+
+    # ── 8. RSI 过热惩罚（仅在极值区间惩罚，避免误杀主升浪）────────────
+    # RSI > 90 通常意味着顶背离风险；70-85 在强势股中属正常
+    rsi = ind.get("rsi", 50)
+    if rsi > 92:
+        score -= 10.0   # 极度过热：几乎必定顶背离
+    elif rsi > 88:
+        score -= 5.0    # 严重过热
+    elif rsi > 85:
+        score -= 2.0    # 轻微过热
+
+    # ── 止损空间评估（风险控制）───────────────────────────────────
+    # 止损空间越小 → 加分（买入成本低，安全边际高）
+    # 止损空间越大 → 扣分（上涨空间被侵蚀）
+    sl_ref = ind.get("stop_loss_ref")
+    if sl_ref is not None and sl_ref > 0:
+        close = ind["close"]
+        stop_pct = (close - sl_ref) / close * 100  # 止损幅度%
+        if stop_pct > 0:
+            if stop_pct <= 3.0:
+                score += 6.0   # 窄止损：极佳买入位
+            elif stop_pct <= 5.0:
+                score += 3.0   # 正常止损
+            elif stop_pct <= 8.0:
+                score += 0.0   # 宽止损，不加分不扣分
+            else:
+                score -= 5.0   # 止损空间过大：风险收益比差
+
     # 4.1 均线多头（0-15分）
     close = ind["close"]
     ma5 = ind["ma5"]
@@ -202,7 +256,7 @@ def score_stock(ind: dict) -> float:
         support_score = 1.0
     score += support_score
 
-    # ── 5. 整理模式（0-10分）────────────────────────
+    # ── 9. 整理模式（0-10分）────────────────────────
     has_con = ind.get("has_consolidation_pattern", False)
     up_ratio = ind.get("vol_up_days_ratio", 0.5)
 
@@ -263,16 +317,17 @@ def score_detail(ind: dict) -> dict:
         vu_score = max(0, vu * (2.0 / 1.2))
     vu_score = min(vu_score, 8.0)
 
+    # 复用 score_stock 匹配的 vr3 计算逻辑（上限3分）
     vr3 = ind.get("vol_recent_3", 1.0)
     if vr3 >= 2.0:
-        vr3_score = 4.0
+        vr3_score = 3.0
     elif vr3 >= 1.5:
-        vr3_score = 2.0 + (vr3 - 1.5) * (2.0 / 0.5)
+        vr3_score = 1.5 + (vr3 - 1.5) * (1.5 / 0.5)
     elif vr3 >= 1.2:
-        vr3_score = 1.0 + (vr3 - 1.2) * (1.0 / 0.3)
+        vr3_score = 0.5 + (vr3 - 1.2) * (1.0 / 0.3)
     else:
-        vr3_score = max(0, vr3 * 0.8)
-    vr3_score = min(vr3_score, 4.0)
+        vr3_score = max(0, vr3 * 0.5)
+    vr3_score = min(vr3_score, 3.0)
 
     close = ind["close"]
     ma_score = 0.0
@@ -327,11 +382,15 @@ def score_detail(ind: dict) -> dict:
     }
 
 
-def classify_phase(ind: dict) -> tuple:
+def classify_phase(ind: dict, filter_passed: bool = True, soft_penalty: float = 0.0) -> tuple:
     """
     判定股票当前所处阶段。
     返回 (phase_label, reason)
     phase_label: "主升浪" / "二次启动" / "洗盘" / "出货" / "吸筹" / "不明"
+
+    Args:
+        filter_passed: 是否通过了 check_filters（影响 phase 判定置信度）
+        soft_penalty: 软扣分（高分说明基本面条件不完美但可接受）
     """
     if not ind:
         return (PHASE_UNCLEAR, "数据不足")

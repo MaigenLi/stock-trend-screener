@@ -44,7 +44,8 @@ def w_get(obj, key: str):
 
 def find_ascending_start(ups: list, default: int | None = 0) -> int | None:
     """
-    扫描找到第一个连续递增三联 ups[i] < ups[i+1] < ups[i+2]
+    扫描找到第一个有效递增对：ups[i] < ups[i+1]
+    （允许小幅回调再突破，不再要求严格三联 ups[i] < ups[i+1] < ups[i+2]）
     返回 u1 的索引 i，之前的波段全部丢弃不参与评分。
 
     Args:
@@ -56,10 +57,9 @@ def find_ascending_start(ups: list, default: int | None = 0) -> int | None:
     Returns:
         第一个 u1 的索引，或 default（找不到时）
     """
-    for i in range(len(ups) - 2):
+    for i in range(len(ups) - 1):
         h0 = w_get(ups[i], "wave_high")
         h1 = w_get(ups[i + 1], "wave_high")
-        h2 = w_get(ups[i + 2], "wave_high")
-        if h0 is not None and h1 is not None and h2 is not None and h0 < h1 < h2:
+        if h0 is not None and h1 is not None and h0 * 0.90 < h1:
             return i
     return default

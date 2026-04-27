@@ -690,6 +690,16 @@ def compute_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
         out[i + 1] = 100.0 - 100.0 / (1.0 + rs)
     return out
 
+def compute_rsi_scalar(close: np.ndarray, period: int = 14) -> float:
+    """
+    RSI（Wilder 平滑），返回最新一日的标量值。
+    兼容 review_screen 评分体系的 calc_rsi 调用方式。
+    """
+    arr = compute_rsi(close, period)
+    valid = arr[~np.isnan(arr)]
+    return float(valid[-1]) if len(valid) > 0 else 50.0
+
+
 @dataclass
 class PreparedData:
     df: pd.DataFrame
