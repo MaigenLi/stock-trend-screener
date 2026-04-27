@@ -22,8 +22,10 @@ sys.path.insert(0, str(WORKSPACE))
 
 from stock_trend.review_screen.screen import load_stock_names
 
-QFQ_DIR     = WORKSPACE / ".cache" / "qfq_daily"
-SECTOR_FILE = WORKSPACE / ".cache" / "sector" / "sector_hotspot.json"
+# 修正：真实缓存路径在 workspace/ 而非 stock_trend/
+_REAL_WORKSPACE = Path.home() / ".openclaw" / "workspace"
+QFQ_DIR     = _REAL_WORKSPACE / ".cache" / "qfq_daily"
+SECTOR_FILE = _REAL_WORKSPACE / ".cache" / "sector" / "sector_hotspot.json"
 
 # ── 表格格式（与screen.py一致）──────────────────────────────
 def _vw(s):
@@ -62,13 +64,15 @@ def _header_row():
     return _make_row([l for l, _, _ in _COLS])
 
 # ── 数据加载 ──────────────────────────────────────────────
+from stock_trend.gain_turnover import normalize_symbol
+
 _price = {}
 
 def preload():
     global _price
     print("📂 加载数据...", flush=True)
     for f in QFQ_DIR.glob("*_qfq.csv"):
-        code = f.stem.replace("_qfq", "")
+        code = normalize_symbol(f.stem.replace("_qfq", ""))
         try:
             df = pd.read_csv(f)
             df = df.sort_values("date").reset_index(drop=True)
@@ -163,6 +167,7 @@ def min_turnover_by_cap(market_cap):
         return 10.0
 
 def check_base(code, signal_date):
+    code = normalize_symbol(code)
     df = _price.get(code)
     if df is None: return None
     il = df["date"].tolist()
@@ -400,6 +405,6 @@ def screen_strat1_v2(target_date, top_n=20):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default="2026-04-24")
-    parser.add_argument("--top-n", type=int, default=100)
+    parser.add_argument("--top-n", type=int, default=80)
     args = parser.parse_args()
     screen_strat1_v2(args.date, args.top_n)
