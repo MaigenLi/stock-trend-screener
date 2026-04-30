@@ -198,7 +198,7 @@ if __name__ == "__main__":
         adjust=args.adjust,
         check_fundamental=args.check_fundamental,
         check_volume_surge=args.check_volume_surge,
-        volume_surge_ratio=args.days,   # 由 --days 决定连续放量天数
+        volume_surge_ratio=1.30,   # 近N日均换手率 >= 前N日均 × 1.30
         sector_bonus=args.sector_bonus,
     )
 

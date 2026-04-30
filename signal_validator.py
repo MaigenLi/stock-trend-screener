@@ -267,7 +267,7 @@ def parse_screen_output(path: Path) -> list[tuple[str, str, str, float]]:
     txt = path.read_text(encoding="utf-8")
     for line in txt.splitlines():
         parts = line.split(TAB)
-        if len(parts) < 15:
+        if len(parts) < 12:  # 至少需要 index 0/1/2/11 共4个字段（实际 triple_screen 有13个字段）
             continue
         p0 = parts[0].strip()
         m = code_pat.match(p0.lower())

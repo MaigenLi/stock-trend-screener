@@ -1,322 +1,173 @@
-# gain_turnover 策略文档
+# stock_trend/ — 股票趋势筛选系统
 
 ## 目录结构
 
 ```
 stock_trend/
-├── gain_turnover.py              # 策略核心（共用模块）
-├── gain_turnover_screen.py      # 选股筛选器
-├── gain_turnover_backtest.py   # 历史回测
-├── gain_turnover_optimize.py    # 参数寻优
-└── trend_strong_screen.py       # 趋势强势股筛选器
+├── gain_turnover.py          # ⭐ 核心数据接口（所有策略的数据底座）
+├── screen_double.py          # ⭐ 双层过滤策略扫描器（主力）
+├── screen_trend.py           # ⭐ 单层趋势筛选器（备选）
+├── eval_double.py            # ⭐ screen_double 信号收益评估
+├── signal_validator.py       # ⭐ 信号验证（盘中/收盘后）
+├── closing_report.py         # ⭐ 每日收盘 PDF 报告
+├── sector_hotspot.py         # ⭐ 板块热点识别模块
+├── refresh_sector_cache.py  # ⭐ 板块缓存刷新（每日/每周）
+├── replenish_sector_map.py   # 补录未映射股票的行业分类
+├── cache_qfq_daily.py        # QFQ 前复权日线数据缓存
+├── cache_fundamental.py      # 基本面数据缓存
+├── gain_turnover_screen.py   # gain_turnover 专属筛选器
+├── triple_screen.py          # 三步筛选 v1（蓄势强势股）
+├── triple_v2_screen.py       # 三步筛选 v2（启动型强势股）
+├── param_optimizer_triple.py # triple_screen 参数优化器
+├── screen_momentum_winners.py # 动量精选
+├── momentum_screen.py        # 动量筛选器
+├── run_daily_pipeline.sh     # 每日流水线 cron 脚本
+└── review_screen/            # review_screen 专用子模块
 ```
 
 ---
 
-## 一、gain_turnover 策略（连续温和上涨选股）
+## 核心文件说明
 
-### 核心理念
-捕捉上升趋势中连续 N 天温和上涨（每日涨幅在某个区间内）的股票，适合寻找启动点。
+### ⭐ gain_turnover.py
+**数据底座**，所有策略的统一数据接口。
 
-### 选股逻辑
+- `load_qfq_history(code, end_date, adjust="qfq")` — 前复权日线
+- `get_all_stock_codes()` — 全市场股票代码
+- `load_stock_names()` / `get_stock_name()` — 股票名称
+- `compute_rsi_scalar()` — RSI（Wilder 平滑）
+- `normalize_symbol()` / `get_lock()` — 代码规范化
 
-**硬门槛（全部满足方可入选）：**
-1. 信号窗口：最近 N 天，每日涨幅在 `[min_gain, max_gain]`
-2. `close > ma5 >= ma10`（均线多头，允许 0.5% 容差）
-3. ma5、ma10 当日值均高于前日值（均线向上）
-4. 10 日涨幅 > 0
-5. RSI(14) < 82
-6. 偏离 MA20 < max_extension%
-7. 20 日均成交额 ≥ 1 亿
-8. 5 日均换手率 ≥ min_turnover
-
-**评分体系（满分 100）：**
-
-| 维度 | 满分 | 说明 |
-|------|------|------|
-| 信号稳定性 | 20 | 涨幅标准差越小越好 |
-| 信号强度 | 10 | 均值越接近区间中值越好 |
-| 趋势质量 | 25 | 多头排列 + ma20上涨 + 20日涨幅 |
-| 成交活跃度 | 15 | 成交额和换手率 |
-| 量能配合 | 15 | 5日/20日成交额比值 + 涨跌量能 |
-| K线质量 | 5 | 实体占比高 + 上影线短 |
-| RSI健康 | 10 | 45~72 得满分，≥82 过滤 |
+> **规则**：所有历史 K 线数据必须通过此文件获取，禁止绕过。
 
 ---
 
-### 筛选器 — gain_turnover_screen.py
+### ⭐ screen_double.py
+**双层过滤策略扫描器**（当前主力）。
 
-筛选全市场符合条件的目标股票。
+- **第一层**（7个条件粗筛）：MA5>MA10>MA20>MA60 多头排列 + 方向向上 + MACD>0 + 5日涨幅 + 换手率门槛 + 数据充足
+- **第二层**（6维度精筛评分，满分85分）：RSI健康 / 板块动量 / 偏离MA20 / 换手率质量 / 5日涨幅健康 / 全市场RPS综合
+- **输出**：120宽表格 + TXT + JSON
 
 ```bash
-# 默认参数（全市场筛选，Top50）
-~/.venv/bin/python gain_turnover_screen.py
-
-# 指定股票
-~/.venv/bin/python gain_turnover_screen.py --codes sh600036 sz300819
-
-# 调整参数
-~/.venv/bin/python gain_turnover_screen.py \
-    --days 2 \
-    --min-gain 2.0 --max-gain 7.0 \
-    --quality-days 10 \
-    --turnover 1.5 \
-    --score-threshold 60 \
-    --top-n 30
-
-# 复盘指定日期（使用该日期的数据）
-~/.venv/bin/python gain_turnover_screen.py --date 2026-04-10
-
-# 输出到文件
-~/.venv/bin/python gain_turnover_screen.py -o ~/stock_reports/my_screen.txt
+~/.venv/bin/python screen_double.py --date 2026-04-29 --top-n 50
 ```
-
-**默认参数：**
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--days` | 2 | 信号窗口天数 |
-| `--min-gain` | 2.0% | 每日涨幅下限 |
-| `--max-gain` | 7.0% | 每日涨幅上限 |
-| `--quality-days` | 10 | 质量窗口天数 |
-| `--turnover` | 1.5% | 5日均换手率下限 |
-| `--score-threshold` | 60 | 评分门槛 |
-| `--max-extension` | 10% | 偏离MA20上限 |
-| `--adjust` | qfq | 前复权 |
-| `--top-n` | 50 | 返回前N只 |
-| `--workers` | 8 | 并行线程数 |
 
 ---
 
-### 回测器 — gain_turnover_backtest.py
+### ⭐ screen_trend.py
+**单层趋势筛选器**（screen_double 的前身备选）。
 
-对历史数据进行回测，评估策略表现。
+- 7个 Layer1 条件，与 screen_double 第一层相同
+- 无第二层精筛评分，输出更简洁
 
 ```bash
-# 默认参数回测（2024-01-01 至 2025-12-31）
-~/.venv/bin/python gain_turnover_backtest.py
-
-# 自定义参数
-~/.venv/bin/python gain_turnover_backtest.py \
-    --days 2 --min-gain 2.0 --max-gain 7.0 \
-    --quality-days 10 --turnover 1.5 \
-    --score-threshold 60 \
-    --hold 3 \
-    --start 2024-01-01 --end 2025-12-31
-
-# 输出交易明细
-~/.venv/bin/python gain_turnover_backtest.py -o trades.json
+~/.venv/bin/python screen_trend.py --date 2026-04-29
 ```
-
-**默认参数：**
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--days` | 2 | 信号窗口天数 |
-| `--min-gain` | 2.0% | 每日涨幅下限 |
-| `--max-gain` | 7.0% | 每日涨幅上限 |
-| `--quality-days` | 10 | 质量窗口天数 |
-| `--turnover` | 1.5% | 5日均换手率下限 |
-| `--score-threshold` | 60 | 评分门槛 |
-| `--hold` | 3 | 持有交易日数 |
-| `--max-picks-per-day` | 3 | 每个信号日最多买几只 |
-| `--buy-slip` | 0.5% | 买入滑点 |
-| `--sell-slip` | 0.5% | 卖出滑点 |
-| `--commission` | 0.03% | 单边佣金 |
-| `--tax` | 0.1% | 卖出印花税 |
 
 ---
 
-### 寻优器 — gain_turnover_optimize.py
+### ⭐ eval_double.py
+**screen_double 信号收益评估**。
 
-网格搜索最佳参数组合。
+- 读取 `screen_double_{signal_date}.txt` 信号文件
+- 计算：信号日 T-3 → T+1开盘买入 → T收盘卖出（持有3天）
+- 输出：每只股票持有收益 + 胜率/平均收益统计
 
 ```bash
-# 全量寻优（所有参数范围）
-~/.venv/bin/python gain_turnover_optimize.py \
-    --start 2024-01-01 --end 2025-12-31
-
-# 自定义范围
-~/.venv/bin/python gain_turnover_optimize.py \
-    --start 2024-01-01 --end 2025-12-31 \
-    --days 2,3 \
-    --min-gain 1.8,2.0,2.2 \
-    --max-gain 5.0,6.0 \
-    --quality-days 10,15 \
-    --turnover 1.0,1.5,2.0 \
-    --score-threshold 60,70 \
-    --hold 3,5 \
-    --max-extension 8,10
+python review_screen/eval_double.py --date 2026-04-29
+# 卖出日 = 2026-04-29
+# 信号日 = 2026-04-24（卖出日前3个交易日）
+# 买入日 = 2026-04-27（信号日下一个交易日）
 ```
-
-**参数范围说明：**
-- 所有参数用逗号分隔多个值
-- 组合数 = 各参数值数量的乘积
-- 建议先用宽范围粗搜，再用窄范围精搜
 
 ---
 
-## 二、趋势强势股筛选 — trend_strong_screen.py
+### ⭐ signal_validator.py
+**信号验证器**。
 
-独立于 gain_turnover 的另一个策略，专注趋势强度。
-
-### 核心理念
-寻找均线多头排列、量能配合良好的趋势强势股。
-
-### 选股逻辑
-
-**硬门槛：**
-1. 20日均成交额 ≥ 5000万
-2. RSI(14) ≤ 88（>88 直接过滤）
-3. 相对强弱 < -10% 直接过滤（个股弱于市场过多）
-
-**评分体系（满分100）：**
-
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| 趋势质量 | 50% | 价格在均线上方 + 均线多头 + 发散度 + 斜率 |
-| 动量 | 30% | 20日涨幅 + 10日涨幅 + 创新高 |
-| 量价 | 20% | 量比 + 成交额放大 + 量价配合 |
-
-**RSI 惩罚：**
-- RSI 75~82：扣 20 分
-- RSI 82~88：扣 40 分
-- RSI > 88：直接过滤
-
-**相对强弱：**
-- 相对强弱 < -10%：直接过滤
-- 相对强弱 < -5%：动量得分打 5 折
-
-### 使用方法
+- 解析 `screen_double_*.txt` / `triple_screen_*.txt` / `daily_screen_*.txt` 信号文件
+- 用 T+1/T+2 实际行情验证信号质量
+- 评分：真实收益 + 止盈 + 止损 + 跳空惩罚
+- 输出：`signal_validation_{date}.txt`
 
 ```bash
-# 默认（全市场 Top30）
-~/.venv/bin/python trend_strong_screen.py
-
-# 严格模式（评分≥80）
-~/.venv/bin/python trend_strong_screen.py --strict
-
-# 指定日期复盘
-~/.venv/bin/python trend_strend_screen.py --date 2026-04-10
-
-# 指定股票
-~/.venv/bin/python trend_strong_screen.py --codes sh600036 sz300568
+python signal_validator.py --date 2026-04-28
 ```
 
 ---
 
-## 三、数据说明
+### ⭐ closing_report.py
+**每日收盘 PDF 报告**。
 
-所有脚本使用 **AkShare 前复权日线数据**：
-- 数据来源：`ak.stock_zh_a_daily()`（Tushare/Emoney）
-- 本地缓存：`.cache/qfq_daily/*.csv`（首次运行后生成）
-- **不依赖通达信本地 .day 文件**
+- 读取 `screen_double_{date}.txt` 信号文件
+- 生成格式化 PDF（板块分布 / RSI分布 / 评分分布）
+- 定时任务自动触发（`run_daily_pipeline.sh`）
 
 ---
 
-## 四、参数推荐
+### ⭐ sector_hotspot.py
+**板块热点识别**。
 
-### gain_turnover 稳健版（默认）
-```
---days 2 --min-gain 2.0 --max-gain 7.0 --quality-days 10 --turnover 1.5 --hold 3
-```
+- 数据源：新浪行业板块 API（49个板块）
+- 热点定义：当日涨幅前15名板块
+- 接口：
+  - `get_hot_sectors(date)` — 返回热点板块 dict（name → 涨跌幅）
+  - `get_stock_sector(code)` — 股票所属板块
 
-### gain_turnover 进取版
-```
---days 2 --min-gain 2.0 --max-gain 7.0 --quality-days 10 --turnover 2.0 --hold 5
-```
-> 进取版 Sharpe 更高，但最大亏损 -28.57%，实盘需配合止损。
+---
 
+### ⭐ refresh_sector_cache.py
+**板块缓存刷新**。
 
-### 📁 两条独立平行的体系
+```bash
+# 每日热点刷新（17:40 cron）
+python refresh_sector_cache.py
 
-┌──────────┬───────────────────────────────────────┬───────────────────────────────────────────────┐
-│          │ stock_trend/（父目录）                │ review_screen/（子目录）                      │
-├──────────┼───────────────────────────────────────┼───────────────────────────────────────────────┤
-│ 定位     │ 盘中/准实时实战流水线                 │ 收盘后复盘分析系统                            │
-├──────────┼───────────────────────────────────────┼───────────────────────────────────────────────┤
-│ 数据源   │ AkShare 实时/缓存                     │ AkShare 前复权日线 CSV 缓存（gain_turnover） │
-├──────────┼───────────────────────────────────────┼───────────────────────────────────────────────┤
-│ 核心功能 │ 选股 → 信号验证 → 反馈追踪 → 收盘报告 │ 复盘选股 → 波段分析 → 回测引擎 → 参数优化     │
-├──────────┼───────────────────────────────────────┼───────────────────────────────────────────────┤
-│ 对外依赖 │ gain_turnover_screen.py               │ 仅 data_cache.py（间接依赖 gain_turnover.py） │
-└──────────┴───────────────────────────────────────┴───────────────────────────────────────────────┘
-
-────────────────────────────────────────────────────────────────────────────────
-
-### ⚙️ 具体脚本对应关系
-
-#### 实战流水线（stock_trend/）
-
-┌─────────────────────────┬──────────────────────────────────────┐
-│ 脚本                    │ 功能                                 │
-├─────────────────────────┼──────────────────────────────────────┤
-│ gain_turnover_screen.py │ 每日涨幅换手率选股（主力筛选器）     │
-├─────────────────────────┼──────────────────────────────────────┤
-│ gain_turnover.py        │ 策略核心模块（数据/评分/信号/诊断）  │
-├─────────────────────────┼──────────────────────────────────────┤
-│ cache_qfq_daily.py      │ 前复权日线每日定时缓存               │
-├─────────────────────────┼──────────────────────────────────────┤
-│ signal_validator.py     │ 昨日信号质量验证（T+1/T+2）          │
-├─────────────────────────┼──────────────────────────────────────┤
-│ feedback_tracker.py     │ 信号生命周期追踪CSV                  │
-├─────────────────────────┼──────────────────────────────────────┤
-│ closing_report.py       │ 收盘PDF报告生成+邮件发送             │
-├─────────────────────────┼──────────────────────────────────────┤
-│ sector_hotspot.py       │ 实时板块热点数据                     │
-├─────────────────────────┼──────────────────────────────────────┤
-│ triple_screen.py        │ 三步选股系统（RPS+趋势+动量）        │
-├─────────────────────────┼──────────────────────────────────────┤
-│ macd_strong_screen.py   │ MACD启动形态筛选                     │
-├─────────────────────────┼──────────────────────────────────────┤
-│ rps_strong_screen.py    │ RPS热力图排序                        │
-├─────────────────────────┼──────────────────────────────────────┤
-│ combined_screen.py      │ real_screen × triple_screen 交集输出 │
-└─────────────────────────┴──────────────────────────────────────┘
-
-#### 复盘分析系统（review_screen/）
-
-┌────────────────────────┬────────────────────────────────────────────────────────────┐
-│ 脚本                   │ 功能                                                       │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ screen.py              │ 复盘选股主入口（依赖内部4个模块）                          │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ screen_trend_filter.py │ 实战强化版筛选（screen.py + buy_ready + P0/P1增强）        │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ screen_rebound_v2.py   │ 超跌反弹8步完整实现                                        │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ screen_breakout.py     │ 横盘突破放量启动                                           │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ screen_strat1_v2.py    │ 均线多头排列双层过滤                                       │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ data_cache.py          │ 唯一跨目录依赖：封装 gain_turnover.load_qfq_history        │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ indicators.py          │ 技术指标计算（MA/RSI/MACD/波段）                           │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ filter_rules.py        │ 实战筛选规则（一票否决/减分/加分）                         │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ scorer.py              │ 多维度评分系统                                             │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ buy_ready.py           │ 明日买入准备度过滤器                                       │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ backtest_engine.py     │ 标准回测引擎                                               │
-├────────────────────────┼────────────────────────────────────────────────────────────┤
-│ backtest_fast.py       │ 与父目录 backtest_fast.py 完全独立（不同文件，仅名字巧合） │
-└────────────────────────┴────────────────────────────────────────────────────────────┘
-
-────────────────────────────────────────────────────────────────────────────────
-
-### 🔄 复用方式总结
-
-```
-  gain_turnover.py（父目录核心库）
-    ├── 被 stock_trend/ 内部脚本直接调用
-    │     ├── gain_turnover_screen.py（选股）
-    │     ├── cache_qfq_daily.py（缓存写入）
-    │     └── signal_validator.py（信号验证）
-    │
-    └── 被 review_screen/data_cache.py 封装为 load_qfq_history()
-          └── review_screen/ 所有脚本均通过 data_cache.py 间接使用
+# 每周重建股票-板块映射（周五20:00 cron）
+python refresh_sector_cache.py --refresh-map
 ```
 
-结论：review_screen/ 是独立封闭的复盘系统，仅通过 data_cache.py 借用 gain_turnover.py 的数据加载能力，不依赖父目录任何具体业务逻辑。两个目录各自独立维 护，数据底层共享缓存体系。
+- `--refresh-map`：重建全量股票→板块映射（约2953只，Sina行业分类）
+- 当前覆盖率：~53%（Sina 只覆盖约3000只股票）
+
+---
+
+## 其他文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `gain_turnover_screen.py` | gain_turnover 专属量价筛选（早期版） |
+| `triple_screen.py` | 三步筛选 v1：RPS≥75 蓄势强势股选入 |
+| `triple_v2_screen.py` | 三步筛选 v2：当日涨幅[2%,7%] 启动型选入 |
+| `param_optimizer_triple.py` | triple_screen 参数优化（遗传算法） |
+| `momentum_screen.py` | 动量筛选器 |
+| `screen_momentum_winners.py` | 动量精选（与 momentum_screen 有重叠） |
+| `replenish_sector_map.py` | 补录腾讯接口未覆盖股票的行业分类 |
+| `cache_qfq_daily.py` | QFQ 日线数据 AkShare 缓存管理 |
+| `cache_fundamental.py` | 基本面数据缓存 |
+| `run_daily_pipeline.sh` | 每日流水线 cron 脚本 |
+
+---
+
+## 数据缓存路径
+
+```
+~/.openclaw/workspace/.cache/
+├── qfq_daily/           # 前复权日线 CSV（~5196只）
+└── sector/
+    ├── sector_hotspot.json      # 热点板块（每日更新）
+    └── stock_sector_map.json    # 股票→板块映射（每周重建）
+```
+
+---
+
+## 定时任务
+
+```cron
+# 每日 17:40 — 收盘流水线
+0 17 * * 1-5 /home/lyc/.openclaw/workspace/stock_trend/run_daily_pipeline.sh
+
+# 每周五 20:00 — 重建板块映射
+0 20 * * 5 /home/lyc/.venv/bin/python /home/lyc/.openclaw/workspace/stock_trend/refresh_sector_cache.py --refresh-map >> /home/lyc/.openclaw/workspace/stock_reports/refresh_sector_cache_weekly.log 2>&1
+```

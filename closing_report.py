@@ -53,7 +53,7 @@ EMAIL_TO = _env.get("QQ_EMAIL", "920662304@qq.com")
 # ── 路径配置 ───────────────────────────────────────────
 WORKSPACE = Path(__file__).parent.parent.resolve()
 REPORTS_DIR = Path.home() / "stock_reports"
-FONT_PATH = "/mnt/c/Windows/Fonts/simhei.ttf"
+FONT_PATH = Path(__file__).parent.parent / "fonts" / "simhei.ttf"  # 本地字体（从Win挂载复制）
 TRACKER_CSV = WORKSPACE / "stock_trend" / "feedback_tracker.csv"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -69,11 +69,18 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+# weasyprint fallback（字体失败时使用）
 try:
-    pdfmetrics.registerFont(TTFont("SimHei", FONT_PATH))
-    pdfmetrics.registerFont(TTFont("SimHei-Bold", FONT_PATH))
-    pdfmetrics.registerFontFamily("SimHei", "SimHei", "SimHei-Bold", "SimHei")
-    BASE_FONT = "SimHei"
+    from weasyprint import HTML as _WH
+    _WEASYPRINT_OK = True
+except ImportError:
+    _WEASYPRINT_OK = False
+
+try:
+    pdfmetrics.registerFont(TTFont("Helvetica", FONT_PATH))
+    pdfmetrics.registerFont(TTFont("Helvetica-Bold", FONT_PATH))
+    pdfmetrics.registerFontFamily("Helvetica", "Helvetica", "Helvetica-Bold", "Helvetica")
+    BASE_FONT = "Helvetica"
 except Exception as e:
     print(f"[closing_report] 字体加载失败: {e}，使用 Helvetica")
     BASE_FONT = "Helvetica"
@@ -93,7 +100,7 @@ C_WARN   = HexColor("#fff8e1")
 C_CODE   = HexColor("#1e1e1e")   # 代码块背景
 
 def S(size, leading=None, color=black, align=TA_LEFT, bold=False):
-    fn = "SimHei-Bold" if bold else "SimHei"
+    fn = "Helvetica-Bold" if bold else "Helvetica"
     return ParagraphStyle(
         "s", fontName=fn, fontSize=size,
         leading=leading or size * 1.45,   # 对齐 md2pdf: 1.45× 行高
@@ -411,7 +418,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
             sign = "+" if pct >= 0 else ""
             color_hex = "c62828" if pct >= 0 else "2e7d32"
             style_note = ParagraphStyle(
-                "ip", fontName="SimHei", fontSize=10,
+                "ip", fontName="Helvetica", fontSize=10,
                 textColor=HexColor(f"#{color_hex}"), alignment=TA_LEFT
             )
             idx_rows.append([
@@ -447,7 +454,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
             pct = s["pct"]
             sign = "+" if pct >= 0 else ""
             color = "c62828" if pct >= 0 else "2e7d32"
-            p = ParagraphStyle("sp", fontName="SimHei", fontSize=9,
+            p = ParagraphStyle("sp", fontName="Helvetica", fontSize=9,
                                textColor=HexColor(f"#{color}"), alignment=TA_LEFT)
             sector_rows.append([
                 Paragraph("📈", TAG_STYLE),
@@ -459,7 +466,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
             pct = s["pct"]
             sign = "+" if pct >= 0 else ""
             color = "c62828" if pct >= 0 else "2e7d32"
-            p = ParagraphStyle("sp", fontName="SimHei", fontSize=9,
+            p = ParagraphStyle("sp", fontName="Helvetica", fontSize=9,
                                textColor=HexColor(f"#{color}"), alignment=TA_LEFT)
             sector_rows.append([
                 Paragraph("📉", TAG_STYLE),
@@ -519,7 +526,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
                     break
 
         # 图例+统计行
-        leg_para = ParagraphStyle("leg_para", fontName="SimHei", fontSize=9,
+        leg_para = ParagraphStyle("leg_para", fontName="Helvetica", fontSize=9,
                                   textColor=HexColor("#ffd600"), bold=True, leading=13)
         leg_tbl = Table([[Paragraph(f"验证样本 {len(val_rows)} 只  {stat_line}", leg_para)]],
                         colWidths=[TEXT_W])
@@ -545,7 +552,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
                 bg, c = HexColor("#fff8e1"), HexColor("#e65100")
             else:
                 bg, c = HexColor("#ffebee"), HexColor("#b71c1c")
-            p = ParagraphStyle("ct", fontName="SimHei", fontSize=8,
+            p = ParagraphStyle("ct", fontName="Helvetica", fontSize=8,
                                textColor=c, bold=True, alignment=TA_CENTER)
             cell = Table([[Paragraph(tag_text, p)]], colWidths=[cw2[-1]])
             cell.setStyle(TableStyle([
@@ -603,7 +610,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
         cnt_red    = sum(1 for t in tags if "🔴" in t)
 
         def _dist_cell(text, bg, fc):
-            p = ParagraphStyle("_d", fontName="SimHei", fontSize=9, bold=True,
+            p = ParagraphStyle("_d", fontName="Helvetica", fontSize=9, bold=True,
                               textColor=fc, alignment=TA_CENTER, leading=13)
             t = Table([[Paragraph(text, p)]], colWidths=[TEXT_W / 4])
             t.setStyle(TableStyle([
@@ -645,6 +652,203 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
     doc.build(story)
     print(f"✅ PDF 已生成: {output_path}")
     return output_path
+
+
+def _extract_paragraph_text(p) -> str:
+    """从 reportlab Paragraph 中提取纯文本"""
+    if hasattr(p, "text"):
+        return p.text
+    return str(p)
+
+def _story_to_html(story, today_str: str) -> str:
+    """将 story 列表中的 Paragraph/Table 转为 HTML 字符串"""
+    import re
+    lines = []
+    lines.append(f'''
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+body {{ font-family: sans-serif; font-size: 13px; margin: 2cm; color: #222; }}
+h1 {{ color: #1a1a2e; border-bottom: 3px solid #1a1a2e; padding-bottom: 8px; margin-top: 0; }}
+h2 {{ color: #1a1a2e; border-left: 5px solid #e63946; padding-left: 10px; margin-top: 24px; }}
+table {{ border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }}
+th {{ background: #1a1a2e; color: white; padding: 6px 8px; text-align: left; }}
+td {{ padding: 5px 8px; border: 1px solid #ccc; }}
+tr:nth-child(even) {{ background: #f5f5f5; }}
+tr:hover {{ background: #e8f4f8; }}
+.highlight {{ color: #e63946; font-weight: bold; }}
+.up {{ color: #e63946; }} .down {{ color: #2e7d32; }}
+.section-note {{ background: #fff8e1; border: 1px solid #ffcc02; padding: 8px; border-radius: 4px; margin: 10px 0; }}
+.footer {{ margin-top: 30px; color: #888; font-size: 11px; border-top: 1px solid #ddd; padding-top: 10px; }}
+.badge-good {{ background: #e8f5e9; color: #2e7d32; padding: 2px 6px; border-radius: 3px; }}
+.badge-warn {{ background: #fff3e0; color: #e65100; padding: 2px 6px; border-radius: 3px; }}
+.badge-bad {{ background: #ffebee; color: #b71c1c; padding: 2px 6px; border-radius: 3px; }}
+</style>
+</head>
+<body>
+<h1>📊 A股收盘报告 {today_str}</h1>
+''')
+    
+    for elem in story:
+        elem_type = type(elem).__name__
+        
+        if elem_type == "Paragraph":
+            text = _extract_paragraph_text(elem)
+            text = text.strip()
+            if not text:
+                continue
+            # 检测标题样式
+            if text.startswith("一、") or text.startswith("二、") or text.startswith("三、") or "报告" in text and len(text) < 30:
+                lines.append(f"<h2>{text}</h2>")
+            elif "评分标准" in text or "说明" in text:
+                lines.append(f'<div class="section-note">🔔 {text}</div>')
+            else:
+                lines.append(f"<p>{text}</p>")
+                
+        elif elem_type == "Table":
+            # 简单提取表格内容
+            try:
+                data = elem._cellvalues
+                if not data or not data[0]:
+                    continue
+                lines.append("<table>")
+                # 表头
+                lines.append("<tr>")
+                for h in data[0]:
+                    ht = _extract_paragraph_text(h) if hasattr(h, "text") else str(h)
+                    lines.append(f"<th>{ht}</th>")
+                lines.append("</tr>")
+                # 数据行
+                for row in data[1:]:
+                    lines.append("<tr>")
+                    if isinstance(row, (list, tuple)):
+                        for cell in row:
+                            ct = _extract_paragraph_text(cell) if hasattr(cell, "text") else str(cell)
+                            # 高亮数字
+                            ct = re.sub(r'([+-]?\d+\.\d+%)', r'<span class="highlight"></span>', ct)
+                            lines.append(f"<td>{ct}</td>")
+                    lines.append("</tr>")
+                lines.append("</table>")
+            except Exception:
+                pass
+        # Spacer/其他跳过
+    
+    lines.append(f'''
+<div class="footer">
+生成时间: {today_str} | 数据仅供参考，不构成投资建议
+</div>
+</body></html>
+''')
+    return "\n".join(lines)
+
+
+def _generate_html_report(story, html_path, today_str):
+    """将 story 内容输出为 HTML 文件"""
+    html_content = _story_to_html(story, today_str)
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"📄 HTML 已生成: {html_path}")
+
+
+
+def _generate_html_report_from_data(today_str: str, screen_rows: list, val_full: str,
+                                     val_rows: list, tracker_stats: str,
+                                     index_data: list, top_sectors: list,
+                                     bottom_sectors: list, html_path) -> None:
+    """从原始数据生成 HTML 报告（用于 reportlab 字体失败时的降级方案）"""
+    def h(t): return t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    def pc(p): return "#e63946" if p >= 0 else "#2e7d32"
+    def tag(t):
+        m = {"🟢":("#e8f5e9","#1b5e20"),"🔵":("#e3f2fd","#0d47a1"),
+             "🟡":("#fff8e1","#e65100"),"🔴":("#ffebee","#b71c1c")}
+        bg,fc = next(((b,f) for k,(b,f) in m.items() if k in t), ("#f5f5f5","#222"))
+        return f'<span style="background:{bg};color:{fc};padding:1px 6px;border-radius:3px">{t}</span>'
+
+    html = """<!DOCTYPE html><html lang="zh"><head>
+<meta charset="utf-8">
+<style>
+body{font-family:sans-serif;font-size:13px;margin:2cm;color:#222}
+h1{color:#1a1a2e;border-bottom:3px solid #1a1a2e;padding-bottom:8px}
+h2{color:#1a1a2e;border-left:5px solid #e63946;padding-left:10px;margin-top:24px}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}
+th{background:#1a1a2e;color:#fff;padding:6px 8px}
+td{padding:5px 8px;border:1px solid #ccc}
+tr:nth-child(even){background:#f5f5f5}
+.up{color:#e63946;font-weight:bold}
+.down{color:#2e7d32}
+.note{background:#fff8e1;border:1px solid #ffc107;padding:8px;border-radius:4px;margin:8px 0}
+.footer{margin-top:30px;color:#888;font-size:11px;border-top:1px solid #ddd;padding-top:10px}
+</style>
+</head><body>
+<h1>📊 A股收盘报告 """ + today_str + """</h1>
+<p style="color:#888">gain_turnover 自我进化策略</p>
+"""
+
+    if index_data:
+        html += "<h2>📊 今日大盘指数</h2><table><tr><th>指数</th><th>收盘价</th><th>涨跌幅</th><th>成交额</th></tr>"
+        for i in index_data:
+            p=i["pct"]; s="+" if p>=0 else ""
+            html += f'<tr><td>{h(i["name"])}</td><td>{i["price"]:,.2f}</td>'
+            html += f'<td style="color:{pc(p)}">{s}{p:.2f}%</td><td>{i["amount"]:.0f}亿</td></tr>'
+        html += "</table>"
+
+    if top_sectors or bottom_sectors:
+        html += "<h2>🔥 行业板块涨跌 TOP</h2><table><tr><th></th><th>板块</th><th>涨跌幅</th></tr>"
+        for s in top_sectors[:8]:
+            p=s["pct"]; sg="+" if p>=0 else ""
+            html += f'<tr><td>📈</td><td>{h(s["name"])}</td><td style="color:{pc(p)}">{sg}{p:.2f}%</td></tr>'
+        for s in bottom_sectors[:8]:
+            p=s["pct"]; sg="+" if p>=0 else ""
+            html += f'<tr><td>📉</td><td>{h(s["name"])}</td><td style="color:{pc(p)}">{sg}{p:.2f}%</td></tr>'
+        html += "</table>"
+
+    html += f"<h2>🧠 策略数据库累计统计</h2><div class=note>{h(tracker_stats)}</div>"
+
+    html += f"<h2>📈 今日选股结果（共 {len(screen_rows)} 只）</h2>"
+    if screen_rows:
+        html += "<table><tr><th>代码</th><th>名称</th><th>总分</th><th>窗口涨幅</th><th>5日换手</th><th>RSI</th><th>收盘</th></tr>"
+        for r in screen_rows[:50]:
+            html += f'<tr><td>{h(r["code"])}</td><td>{h(r["name"])}</td><td>{r["score"]:.1f}</td>'
+            html += f'<td>{h(r.get("gain","-"))}</td><td>{h(r.get("turnover","-"))}</td>'
+            html += f'<td>{h(r.get("rsi","-"))}</td><td>{h(r.get("close","-"))}</td></tr>'
+        html += "</table>"
+    else:
+        html += "<div class=note>⚠️ 今日选股结果为空</div>"
+
+    html += "<h2>🔍 昨日信号验证（T+1 日收益）</h2>"
+    if val_rows:
+        sl = ""
+        if val_full:
+            for line in val_full.splitlines():
+                if "均分=" in line or "上涨=" in line: sl=line.strip(); break
+        html += f'<div style="background:#1a237e;color:#ffd600;padding:8px 12px;margin:8px 0;border-radius:4px">验证样本 {len(val_rows)} 只 &nbsp; {h(sl)}</div>'
+        html += "<table><tr><th>代码</th><th>名称</th><th>今收</th><th>真实收益</th><th>参收益</th><th>高涨</th><th>评分</th><th>评价</th></tr>"
+        for r in val_rows:
+            html += f'<tr><td>{h(r["code"])}</td><td>{h(r["name"])}</td><td>{h(r["close"])}</td>'
+            cls = "up" if "+" in r.get("ret_actual","") else "down"
+            html += f'<td class="{cls}">{h(r["ret_actual"])}</td><td>{h(r["ret_signal"])}</td>'
+            html += f'<td>{h(r["ret_high"])}</td><td>{h(r["score"])}</td><td>{tag(r["tag"])}</td></tr>'
+        html += "</table>"
+        tags=[r.get("tag","") for r in val_rows]
+        c={k:sum(1 for t in tags if k in t) for k in ["🟢","🔵","🟡","🔴"]}
+        html += "<table style=table-layout:fixed><tr>"
+        html += f'<td style="background:#e8f5e9;color:#1b5e20;text-align:center;padding:8px">🟢优秀<br>{c["🟢"]}只</td>'
+        html += f'<td style="background:#e3f2fd;color:#0d47a1;text-align:center;padding:8px">🔵良好<br>{c["🔵"]}只</td>'
+        html += f'<td style="background:#fff8e1;color:#e65100;text-align:center;padding:8px">🟡及格<br>{c["🟡"]}只</td>'
+        html += f'<td style="background:#ffebee;color:#b71c1c;text-align:center;padding:8px">🔴失效<br>{c["🔴"]}只</td>'
+        html += "</tr></table>"
+    else:
+        html += "<p>（验证报告为空）</p>"
+
+    html += """<div class=note>评分标准（基于 T+1 真实收益）：🟢优秀≥85  🔵良好≥70  🟡及格≥55  🔴失效<55 | 真实收益 = T+1开盘买入 → T+1收盘卖出（持有1天）</div>
+<div class=footer>数据仅供参考，不构成投资建议</div>
+</body></html>"""
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"📄 HTML 已生成: {html_path}")
 
 
 # ── 步骤5：发送邮件 ───────────────────────────────────
@@ -735,11 +939,32 @@ def main():
         print("⚠️ 今日选股文件不存在，直接运行...")
         screen_rows, _ = run_screen(args.top_n)
 
-    # 6. 生成 PDF
-    pdf_path = build_pdf(
-        today_str, screen_rows, val_full, val_rows, tracker_stats,
-        index_data, top_sectors, bottom_sectors
-    )
+    # 6. 生成 PDF（字体失败时降级为 HTML + weasyprint）
+    pdf_path = REPORTS_DIR / f"closing_report_{today_str}.pdf"
+    html_path = REPORTS_DIR / f"closing_report_{today_str}.html"
+    
+    # 优先尝试 reportlab PDF
+    try:
+        pdf_path = build_pdf(
+            today_str, screen_rows, val_full, val_rows, tracker_stats,
+            index_data, top_sectors, bottom_sectors
+        )
+        print(f"✅ PDF 已生成: {pdf_path}")
+    except Exception as e:
+        print(f"⚠️ PDF 生成失败: {type(e).__name__}: {str(e)[:80]}")
+        print("→ 切换到 HTML 降级方案...")
+        try:
+            from weasyprint import HTML as _WH
+            _generate_html_report_from_data(
+                today_str, screen_rows, val_full, val_rows,
+                tracker_stats, index_data, top_sectors, bottom_sectors, html_path
+            )
+            _WH(string=open(html_path, encoding="utf-8").read()).write_pdf(str(pdf_path))
+            pdf_path = pdf_path.resolve()
+            print(f"✅ PDF 已生成 (HTML→weasyprint): {pdf_path}")
+        except Exception as e2:
+            print(f"⚠️ HTML 降级也失败: {e2}，保留 HTML 文件")
+            pdf_path = html_path  # 降级为 HTML
 
     # 7. 发送邮件
     if not args.no_email:

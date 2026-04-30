@@ -186,6 +186,8 @@ class StrategyConfig:
     max_extension_pct: float = 16.0
     min_history_days: int = 90
     check_fundamental: bool = False   # 是否检查基本面（亏损/PE为负扣分）
+    check_volume_surge: bool = False   # 是否开启质量窗口放量检查
+    volume_surge_ratio: float = 1.30  # 放量倍数阈值（默认1.30倍）
     sector_bonus: bool = False         # 是否开启热门板块加分
     sector_top_n: int = 15             # 前N名板块视为热门板块
     sector_bonus_pts: float = 8.0      # 热门板块加分分值
