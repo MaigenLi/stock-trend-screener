@@ -2,14 +2,18 @@
 """
 screen_double.py — 策略扫描器（双层过滤 + 全市场RPS综合排序）
 ========================================================
-第一层（趋势基础）：7个条件过滤
-  1. MA5 > MA10 > MA20 > MA60（均线多头排列）
-  2. MA5/MA10/MA20/MA60 方向全部向上
-  3. 收盘价 > MA10
-  4. MACD > 0 且 DIF > 0 且 DEA > 0
-  5. 5日涨幅 > 5%（或宽松条件）
-  6. 5日均换手率达到市值门槛
-  7. 信号日数据窗口 ≥ 66 根K线（距上市 > 65天）
+第一层（趋势基础）：8个条件过滤（全部通过才进入第二层）
+  条件1：距上市>65天（数据窗口≥66根K线，排除新股）
+  条件2：MA5 > MA60 且 MA10 > MA60 且 MA20 > MA60
+  条件3：均线方向（三选一）
+    【正常】MA5/MA10/MA20/MA60 方向全部向上（5日均值 > 5日前均值×1.001）
+    【加速】MA10/MA20/MA60向上 且 当日涨幅>5% 且 当日换手≥10%
+    【赢家】MA5>MA10>MA20>MA60（空间有序）且方向全部向上
+  条件4：收盘价 > MA10
+  条件5：DIF上涨 且 DIF>0 且 DEA>0（多头排列，非金叉）
+  条件6：5日涨幅 > 5%（正常）或（>2% 且近5日≥3天收盘>MA5）（宽松）
+  条件7：当日换手率 > 0（停牌过滤）
+  条件8：5日均换手率 ≥ 门槛值（≥500亿≥1%，≥50亿≥3%，≥30亿≥5%，≥20亿≥8%，＜20亿≥10%）
 
 第二层（精筛）：6个评分条件
   条件1：RSI健康（满分20）
@@ -34,6 +38,7 @@ import pandas as pd
 
 WORKSPACE = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 from stock_trend.gain_turnover import (
     normalize_symbol,
@@ -73,6 +78,21 @@ L2_GAIN_BIAS_STRONG_MAX = 25
 L2_GAIN_HOT_MAX = 35
 L2_GAIN_COOL_MIN = 2
 L2_GAIN_COOL_MAX = 5
+
+# ── 可配置参数（CLI覆盖）────────────────────────────────────
+_CLI_MODE = "normal"          # "normal" | "accelerated" | "winner"
+_CLI_GAIN20_MIN = None        # None = 不设限
+_CLI_TURNOVER_MIN = None      # None = 使用市值规则
+
+def set_cli_params(mode=None, gain20=None, turnover=None, no_hot=False):
+    global _CLI_MODE, _CLI_GAIN20_MIN, _CLI_TURNOVER_MIN, _CLI_NO_HOT
+    if mode is not None:
+        _CLI_MODE = mode
+    if gain20 is not None:
+        _CLI_GAIN20_MIN = float(gain20)
+    if turnover is not None:
+        _CLI_TURNOVER_MIN = float(turnover)
+    _CLI_NO_HOT = no_hot
 
 RPS_POOL_NAME = "全市场有效股票池"
 # RPS_MIN_ACCEPT = 10.0  # 已弃用：不再硬拒绝，由得分自动体现
@@ -242,14 +262,14 @@ def min_turnover_by_cap(market_cap):
 
     门槛表：
       市值 ≥ 500亿 → ≥1%
-      市值 ≥ 100亿 → ≥3%
+      市值 ≥ 50亿  → ≥3%
       市值 ≥ 30亿  → ≥5%
       市值 ≥ 20亿  → ≥8%
       市值 < 20亿  → ≥10%
     """
     if market_cap >= 500:
         return 1.0
-    elif market_cap >= 100:
+    elif market_cap >= 50:
         return 3.0
     elif market_cap >= 30:
         return 5.0
@@ -258,7 +278,161 @@ def min_turnover_by_cap(market_cap):
     else:
         return 10.0
 
+def debug_base(code, signal_date):
+    """逐条件诊断check_base，返回每条的通过/失败详情。"""
+    code = normalize_symbol(code)
+    df = _price.get(code)
+    results = []  # [(label, passed:bool, detail:str)]
+
+    if df is None:
+        results.append(("条件0 数据", False, "缓存中无此代码"))
+        return results
+    il = df["date"].tolist()
+    try: idx = il.index(signal_date)
+    except:
+        results.append(("条件0 数据", False, f"日期 {signal_date} 不在K线中"))
+        return results
+    if idx < L1_MIN_BARS:
+        results.append(("条件1 数据窗口", False, f"仅有 {idx+1} 根K线，需 >{L1_MIN_BARS}"))
+        return results
+    results.append(("条件1 数据窗口", True, f"{idx+1} 根K线 > {L1_MIN_BARS}"))
+
+    window = df.iloc[idx - L1_MIN_BARS:idx + 1]
+    closes = window["close"].values
+    if "true_turnover" in window.columns and window["true_turnover"].notna().any():
+        turnovers = window["true_turnover"].values
+    elif "turnover" in window.columns:
+        turnovers = window["turnover"].values
+    else:
+        turnovers = np.zeros(len(window))
+    T_pos = len(closes) - 1
+    close_T = closes[T_pos]
+
+    outstanding = window["outstanding_share"].values if "outstanding_share" in window.columns else None
+    market_cap = None
+    if outstanding is not None and len(outstanding) > 0:
+        latest_outstanding = float(outstanding[-1])
+        if latest_outstanding > 0:
+            market_cap = latest_outstanding * close_T / 1e8
+
+    ma5=calc_ma(closes,5); ma10=calc_ma(closes,10)
+    ma20=calc_ma(closes,20); ma60=calc_ma(closes,60)
+    if None in [ma5,ma10,ma20,ma60]:
+        results.append(("条件2 均线位置", False, "无法计算均线"))
+        return results
+
+    # 条件2
+    c2_pass = ma5>ma60 and ma10>ma60 and ma20>ma60
+    results.append(("条件2 均线位置", c2_pass,
+        f"MA5({ma5:.2f})>MA60({ma60:.2f})={"✓" if ma5>ma60 else "✗"}, "
+        f"MA10({ma10:.2f})>MA60({ma60:.2f})={"✓" if ma10>ma60 else "✗"}, "
+        f"MA20({ma20:.2f})>MA60({ma60:.2f})={"✓" if ma20>ma60 else "✗"}"))
+
+    # 条件3
+    d5=ma_direction(closes,5); d10=ma_direction(closes,10)
+    d20=ma_direction(closes,20); d60=ma_direction(closes,60)
+    normal_path = (d5==1 and d10==1 and d20==1 and d60==1)
+    gain_today = (close_T / closes[T_pos-1] - 1) * 100 if T_pos >= 1 else 0
+    turnover_today = turnovers[T_pos] if T_pos < len(turnovers) else 0
+    accelerated_path = (d10==1 and d20==1 and d60==1 and gain_today > 5.0 and turnover_today >= 10.0)
+    winner_path = (ma5 > ma10 > ma20 > ma60 and d5 == 1 and d10 == 1 and d20 == 1 and d60 == 1)
+    mode = _CLI_MODE
+
+    dir_label = lambda v: "↑" if v==1 else ("↓" if v==-1 else "→")
+    detail_winner = (f"MA5({ma5:.2f})>MA10({ma10:.2f})={"✓" if ma5>ma10 else "✗"}, "
+        f"MA10>MA20={"✓" if ma10>ma20 else "✗"}, MA20>MA60={"✓" if ma20>ma60 else "✗"}, "
+        f"方向: d5={dir_label(d5)} d10={dir_label(d10)} d20={dir_label(d20)} d60={dir_label(d60)}")
+    detail_normal = (f"方向: d5={dir_label(d5)} d10={dir_label(d10)} d20={dir_label(d20)} d60={dir_label(d60)}")
+    detail_accel = (f"方向: d10={dir_label(d10)} d20={dir_label(d20)} d60={dir_label(d60)}, "
+        f"当日涨幅={gain_today:+.1f}%, 当日换手={turnover_today:.1f}%")
+
+    if mode == "winner":
+        results.append(("条件3 均线方向(WINNER)", winner_path, detail_winner))
+        c3_pass = winner_path
+    else:
+        c3_pass = normal_path or accelerated_path
+        passed_n = "✓" if normal_path else "✗"
+        passed_a = "✓" if accelerated_path else "✗"
+        results.append(("条件3 均线方向(NORMAL/ACCEL)", c3_pass,
+            f"NORMAL[{passed_n}] {detail_normal} | ACCEL[{passed_a}] {detail_accel}"))
+
+    # 条件7: 停牌过滤
+    c7_pass = turnover_today > 0
+    results.append(("条件7 停牌过滤", c7_pass, f"当日换手={turnover_today:.2f}% {">0 ✓" if c7_pass else "=0 停牌"}"))
+
+    if not c3_pass or not c2_pass or not c7_pass:
+        return results  # 提前返回，避免后面可能崩溃
+
+    # 条件4
+    c4_pass = close_T > ma10
+    results.append(("条件4 收盘>MA10", c4_pass, f"收盘({close_T:.2f}) > MA10({ma10:.2f})={"✓" if c4_pass else "✗"}"))
+
+    # 条件5: MACD/DIF/DEA
+    macd,dif,dea = calc_macd(closes)
+    if macd is None:
+        results.append(("条件5 DIF/DEA", False, "无法计算MACD"))
+    else:
+        dif_ok = dif > 0; dea_ok = dea > 0
+        ef_t = calc_ema(closes[:T_pos], 12); es_t = calc_ema(closes[:T_pos], 26)
+        ef_y = calc_ema(closes[:T_pos-1], 12); es_y = calc_ema(closes[:T_pos-1], 26)
+        dif_y = ef_y - es_y; dif_up = dif > dif_y
+        c5_pass = dif_ok and dea_ok and dif_up
+        results.append(("条件5 DIF/DEA/DIF↑", c5_pass,
+            f"DIF({dif:.3f})>0={"✓" if dif_ok else "✗"}, DEA({dea:.3f})>0={"✓" if dea_ok else "✗"}, DIF↑={"✓" if dif_up else "✗"}"))
+
+    if T_pos < 5:
+        results.append(("条件6 5日涨幅", False, "K线不足5根"))
+        return results
+
+    # 条件6: 5日涨幅
+    gain5d = (close_T / closes[T_pos-5] - 1) * 100
+    days_above_ma5 = 0
+    for i in range(max(0, T_pos-4), T_pos+1):
+        ma5_i = calc_ma(closes[:i+1], 5)
+        if ma5_i is not None and closes[i] > ma5_i:
+            days_above_ma5 += 1
+    c6a = gain5d > L1_GAIN_STRICT
+    c6b = gain5d > L1_GAIN_RELAXED and days_above_ma5 >= L1_RELAX_MA5_DAYS
+    c6_pass = c6a or c6b
+    results.append(("条件6 5日涨幅", c6_pass,
+        f"5日涨={gain5d:+.2f}%（需>{L1_GAIN_STRICT}%），宽松={c6b}（>{L1_GAIN_RELAXED}% 且近5日≥{L1_RELAX_MA5_DAYS}天>MA5），当前>MA5天数={days_above_ma5}"))
+
+    # 20日涨幅
+    ret20 = float(close_T / closes[T_pos-21] - 1) * 100 if T_pos >= 21 else None
+    if _CLI_GAIN20_MIN is not None and ret20 is not None:
+        c_g20 = ret20 >= _CLI_GAIN20_MIN
+        results.append(("筛选 20日涨幅门槛", c_g20,
+            f"20日涨={ret20:+.2f}%（需≥{_CLI_GAIN20_MIN}%）={"✓" if c_g20 else "✗"}"))
+    elif ret20 is not None:
+        results.append(("筛选 20日涨幅门槛", True, f"未设门槛（20日涨={ret20:+.2f}%）"))
+
+    # 换手率
+    avg_turnover_5 = float(np.mean(turnovers[T_pos-4:T_pos+1])) if T_pos>=4 else float(turnovers[T_pos])
+    if _CLI_TURNOVER_MIN is not None:
+        threshold = _CLI_TURNOVER_MIN
+        rule = f"CLI参数={_CLI_TURNOVER_MIN}%"
+    else:
+        threshold = min_turnover_by_cap(market_cap) if (market_cap is not None and market_cap > 0) else 10.0
+        rule = f"市值规则(市值={market_cap}亿→门槛={threshold}%)" if market_cap else "保守门槛=10%"
+    c8_pass = avg_turnover_5 >= threshold
+    results.append((f"条件8 均换手≥{threshold}%", c8_pass,
+        f"5日均换手={avg_turnover_5:.2f}%（{rule}）={"✓" if c8_pass else "✗"}"))
+
+    return results
+
+
 def check_base(code, signal_date):
+    """返回信号字典或None（不满足第一层条件）。
+    
+    条件3 均线方向模式（通过全局_CLI_MODE控制）：
+      normal     → MA5/MA10/MA20/MA60 全部向上（5日均值 > 5日前均值×1.001）
+      accelerated→ MA10/MA20/MA60向上 且 当日涨幅>5% 且 当日换手≥10%
+      winner     → MA5>MA10>MA20>MA60 且方向全部向上（更严格的空间约束）
+    
+    可配置参数（_CLI_MODE / _CLI_GAIN20_MIN / _CLI_TURNOVER_MIN）：
+      _CLI_GAIN20_MIN   → 20日涨幅最低门槛（%），None=不设限
+      _CLI_TURNOVER_MIN → 5日均换手率最低门槛（%），None=使用市值规则
+    """
     code = normalize_symbol(code)
     df = _price.get(code)
     if df is None: return None
@@ -291,14 +465,45 @@ def check_base(code, signal_date):
     ma20=calc_ma(closes,20); ma60=calc_ma(closes,60)
     if None in [ma5,ma10,ma20,ma60]: return None
 
-    if not (close_T > ma10): return None
+    # ── 条件2：均线位置（MA5>MA60 且 MA10>MA60 且 MA20>MA60）─────────
+    if not (ma5>ma60 and ma10>ma60 and ma20>ma60): return None
+
+    # ── 条件3：均线方向（三选一）─────────────────────────────
     d5=ma_direction(closes,5); d10=ma_direction(closes,10)
     d20=ma_direction(closes,20); d60=ma_direction(closes,60)
-    if not (d5==1 and d10==1 and d20==1 and d60==1): return None
-    if not (ma5>ma10>ma20>ma60): return None
+    # 【正常】MA5/MA10/MA20/MA60 方向全部向上（5日均值 > 5日前均值×1.001）
+    normal_path = (d5==1 and d10==1 and d20==1 and d60==1)
+    # 【加速】MA10/MA20/MA60向上 且 当日涨幅>5% 且 当日换手≥10%
+    gain_today = (close_T / closes[T_pos-1] - 1) * 100 if T_pos >= 1 else 0
+    turnover_today = turnovers[T_pos] if T_pos < len(turnovers) else 0
+    # ── 停牌过滤：当日换手率=0视为停牌 ─────────────────────
+    if turnover_today <= 0: return None
+
+    accelerated_path = (d10==1 and d20==1 and d60==1
+                       and gain_today > 5.0
+                       and turnover_today >= 10.0)
+    # 【赢家】MA5>MA10>MA20>MA60（空间有序）且方向全部向上
+    winner_path = (ma5 > ma10 > ma20 > ma60
+                   and d5 == 1 and d10 == 1 and d20 == 1 and d60 == 1)
+
+    mode = _CLI_MODE
+    if mode == "winner":
+        if not winner_path: return None
+    else:
+        # normal / accelerated：均接受 normal_path OR accelerated_path（两选一即通过）
+        if not (normal_path or accelerated_path): return None
+
+    # ── 条件4：收盘价 > MA10 ─────────────────────────────────
+    if not (close_T > ma10): return None
 
     macd,dif,dea = calc_macd(closes)
-    if macd is None or not (macd>0 and dif>0 and dea>0): return None
+    if macd is None or not (dif>0 and dea>0): return None
+    # DIF 今日 > DIF 昨日（DIF处于上升中）
+    if T_pos < 1: return None
+    ef_t = calc_ema(closes[:T_pos], 12); es_t = calc_ema(closes[:T_pos], 26)
+    ef_y = calc_ema(closes[:T_pos-1], 12); es_y = calc_ema(closes[:T_pos-1], 26)
+    dif_y = ef_y - es_y
+    if dif <= dif_y: return None
 
     if T_pos < 5: return None
     # ── 5日涨幅 + 辅助条件 ─────────────────────────────────
@@ -316,18 +521,26 @@ def check_base(code, signal_date):
         if not (gain5d > L1_GAIN_RELAXED and days_above_ma5 >= L1_RELAX_MA5_DAYS):
             return None
 
+    # ── 中期涨幅（用于RPS排序 + _CLI_GAIN20_MIN 门槛）────────
+    ret20 = float(close_T / closes[T_pos-21] - 1) * 100 if T_pos >= 21 else None
+    ret10 = float(close_T / closes[T_pos-11] - 1) * 100 if T_pos >= 11 else None
+
+    # ── 可配置20日涨幅门槛（ret20 已知后才检查）────────────
+    if _CLI_GAIN20_MIN is not None and ret20 is not None:
+        if ret20 < _CLI_GAIN20_MIN: return None
+
+    # ── 5日均换手率（必须先计算，才能做门槛检查）─────────────
     avg_turnover_5 = float(np.mean(turnovers[T_pos-4:T_pos+1])) if T_pos>=4 else float(turnovers[T_pos])
-    # 市值未知/无效时使用最高换手率门槛（10%）
-    threshold = min_turnover_by_cap(market_cap) if (market_cap is not None and market_cap > 0) else 10.0
+    # ── 可配置换手率门槛（覆盖默认值）───────────────────────
+    if _CLI_TURNOVER_MIN is not None:
+        threshold = _CLI_TURNOVER_MIN
+    else:
+        threshold = min_turnover_by_cap(market_cap) if (market_cap is not None and market_cap > 0) else 10.0
     if avg_turnover_5 < threshold: return None
 
     # RSI 只计算到信号日（含），窗口为 L1_MIN_BARS=65 根K线
     rsi = calc_rsi(closes[:T_pos+1])
     if rsi is None: rsi = 50.0
-
-    # ── 中期涨幅（用于RPS排序）────────────────────────────
-    ret20 = float(close_T / closes[T_pos-21] - 1) * 100 if T_pos >= 21 else None
-    ret10 = float(close_T / closes[T_pos-11] - 1) * 100 if T_pos >= 11 else None
 
     return {
         "code": code, "signal_date": signal_date,
@@ -510,17 +723,75 @@ def _inject_rps(signals, market_pool):
 
 
 # ── 主扫描 ───────────────────────────────────────────────
-def screen_strategy(target_date, top_n=20):
+def screen_strategy(target_date, top_n=20, single_code=None):
     print(f"📊 策略扫描: {target_date}", flush=True)
     t0 = time.time()
     if not _price: preload()
     if not _sector_map: load_sector_map()
 
-    hot_sectors = load_hot_sectors()
+    hot_sectors = load_hot_sectors() if not _CLI_NO_HOT else {}
     if hot_sectors:
         print(f"   热点板块({len(hot_sectors)}个, {_sector_cache_note()}): {', '.join(list(hot_sectors.keys())[:5])}...", flush=True)
     else:
         print(f"   热点板块(0个, {_sector_cache_note()})", flush=True)
+
+    # ── 单只股票模式 ────────────────────────────────
+    if single_code:
+        single_code = normalize_symbol(single_code)
+        sig = check_base(single_code, target_date)
+        if sig is None:
+            # 逐条诊断
+            print(f"\n{'='*100}", flush=True)
+            print(f"📊 单票诊断: {single_code}  日期: {target_date}", flush=True)
+            print("="*100, flush=True)
+            diagnostics = debug_base(single_code, target_date)
+            fail_list = []
+            for label, passed, detail in diagnostics:
+                icon = "✅" if passed else "❌"
+                print(f"  {icon} {label}", flush=True)
+                if not passed:
+                    print(f"      └ {detail}", flush=True)
+                    fail_list.append(label)
+            if fail_list:
+                print(f"\n  ⛔ 未通过条件: {', '.join(fail_list)}", flush=True)
+            else:
+                # 理论上不会到这里（check_base返回None应有失败项）
+                print(f"\n  ⚠️ 所有诊断通过但check_base返回None，可能中间有未覆盖的检查", flush=True)
+            print("="*100, flush=True)
+            return
+        market_rps_pool = _build_market_rps_pool([single_code], target_date)
+        _inject_rps([sig], market_rps_pool)
+        passed, score, reasons = score_stock(sig, hot_sectors)
+        sig["score"] = round(score, 1)
+        sig["reasons"] = reasons
+        names = load_stock_names()
+        name = names.get(single_code, single_code)
+        sector = get_sector(single_code) or "-"
+        hot_sector_names = list(hot_sectors.keys()) if hot_sectors else []
+        is_hot = "✅" if (hot_sector_names and sector in hot_sector_names) else "-" if hot_sectors else "·"
+        print(f"\n{'='*100}", flush=True)
+        print(f"📊 单票分析: {single_code} {name}  日期: {target_date}", flush=True)
+        print("="*100, flush=True)
+        print(f"  收盘价: {sig['close']:.2f}", flush=True)
+        print(f"  MA5/MA10/MA20/MA60: {sig['ma5']:.2f} / {sig['ma10']:.2f} / {sig['ma20']:.2f} / {sig['ma60']:.2f}", flush=True)
+        print(f"  5日涨幅: {sig['gain5d']:+.2f}%", flush=True)
+        print(f"  5日均换手: {sig['avg_turnover_5']:.2f}%", flush=True)
+        print(f"  RSI: {sig['rsi']:.1f}", flush=True)
+        print(f"  偏离MA20: {sig['dist_ma20']:+.1f}%", flush=True)
+        print(f"  20日涨幅: {sig['ret20']:+.2f}%" if sig.get('ret20') is not None else "  20日涨幅: N/A", flush=True)
+        print(f"  市值: {sig['market_cap']:.0f}亿" if sig.get('market_cap') else "  市值: N/A", flush=True)
+        print(f"  板块: {sector}  热点: {is_hot}", flush=True)
+        print(f"\n  第一层: {'✅ 通过' if passed else '❌ 失败'}", flush=True)
+        if passed:
+            print(f"  第二层评分: {score}分", flush=True)
+            print(f"  详细原因: {' | '.join(reasons)}", flush=True)
+            print(f"  RPS综合: {sig.get('rps_composite', 0):.0f}", flush=True)
+            # JSON单行输出
+            print(json.dumps({"code": single_code, "name": name, "signal_date": target_date}, ensure_ascii=False), flush=True)
+        else:
+            print(f"  拒绝原因: {' | '.join(reasons)}", flush=True)
+        print("="*100, flush=True)
+        return
 
     codes = [f.stem.replace("_qfq", "") for f in QFQ_DIR.glob("*_qfq.csv")]
     print(f"   全市场 {len(codes)} 只\n", flush=True)
@@ -570,7 +841,7 @@ def screen_strategy(target_date, top_n=20):
     for s in final_signals[:top_n]:
         name = names.get(s["code"], s["code"])[:6]
         sector = get_sector(s["code"]) or "-"
-        is_hot = "✅" if sector in hot_sector_names else "-"
+        is_hot = "✅" if (hot_sector_names and sector in hot_sector_names) else "-"
         row = _make_row([
             s["code"], name, target_date,
             f"{s.get('score', 0):.1f}",
@@ -593,10 +864,17 @@ def screen_strategy(target_date, top_n=20):
     txt_lines.append("=" * 120)
 
     # ── 保存TXT ──────────────────────────────────────
-    txt_path = Path.home() / "stock_reports" / f"screen_double_{target_date}.txt"
+    txt_path = OUTPUT_DIR / f"screen_double_{target_date}.txt"
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write("\n".join(txt_lines))
     print(f"💾 TXT已保存: {txt_path}", flush=True)
+
+    # ── 保存JSON（每行一个JSON对象，code/name/signal_date）────
+    json_path = OUTPUT_DIR / f"screen_double_{target_date}.json"
+    lines = [json.dumps({"code": s["code"], "name": names.get(s["code"], s["code"]), "signal_date": target_date}, ensure_ascii=False) for s in final_signals[:top_n]]
+    with open(json_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"💾 JSON已保存: {json_path}", flush=True)
 
 
 # ── 主入口 ───────────────────────────────────────────────
@@ -609,13 +887,17 @@ def print_screening_logic():
 ╚══════════════════════════════════════════════════════════════════════╝
 
 【第一层：趋势基础条件】（全部通过才进入第二层）
-  1. MA5 > MA10 > MA20 > MA60（均线多头排列）
-  2. MA5/MA10/MA20/MA60 方向全部向上（5日内均值 > 5日前均值 × 1.001）
-  3. 收盘价 > MA10
-  4. MACD > 0 且 DIF > 0 且 DEA > 0（多头排列，非金叉）
-  5. {HELP_L1_GAIN_RULE}
-  6. 5日均换手率 ≥ 门槛值（市值≥500亿≥1%，≥100亿≥3%，≥30亿≥5%，≥20亿≥8%，＜20亿≥10%）
-  7. 信号日数据窗口充足（距上市>{L1_MIN_BARS}天，排除新股）
+  条件1：距上市>{L1_MIN_BARS}天（数据窗口充足，排除新股）
+  条件2：MA5 > MA60 且 MA10 > MA60 且 MA20 > MA60
+  条件3：均线方向（三选一）
+    【正常】MA5/MA10/MA20/MA60 方向全部向上（5日均值 > 5日前均值×1.001）
+    【加速】MA10/MA20/MA60向上 且 当日涨幅>5% 且 当日换手≥10%
+    【赢家】MA5>MA10>MA20>MA60（空间有序）且方向全部向上（更严格的空间约束）
+  条件4：收盘价 > MA10
+  条件5：DIF上涨 且 DIF>0 且 DEA>0（多头排列，非金叉）
+  条件6：{HELP_L1_GAIN_RULE}
+  条件7：当日换手率 > 0（停牌过滤）
+  条件8：5日均换手率 ≥ 门槛值（默认按市值规则，或通过 --turnover 参数覆盖）
 
 【第二层：精筛评分条件】
   条件1：RSI 健康区间（满分20分）
@@ -659,12 +941,24 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser()
         parser.add_argument("--date", default="2026-04-24")
         parser.add_argument("--top-n", type=int, default=80)
+        parser.add_argument("--code", default=None, help="单只股票代码，只分析指定股票")
         parser.print_help()
         print()
         sys.exit(0)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default="2026-04-24")
-    parser.add_argument("--top-n", type=int, default=80)
+    parser.add_argument("--top-n", type=int, default=300)
+    parser.add_argument("--code", default=None, help="单只股票代码，只分析指定股票")
+    parser.add_argument("--mode", default="normal",
+                        choices=["normal", "accelerated", "winner"],
+                        help="条件3均线方向模式：normal(默认)/accelerated/winner")
+    parser.add_argument("--gain20", type=float, default=None,
+                        help="20日涨幅最低门槛（%%），默认不设限")
+    parser.add_argument("--turnover", type=float, default=None,
+                        help="5日均换手率最低门槛（%%），默认按市值规则")
+    parser.add_argument("--no-hot", action="store_true",
+                        help="不显示/不区分热点板块（默认显示）")
     args = parser.parse_args()
-    screen_strategy(args.date, args.top_n)
+    set_cli_params(mode=args.mode, gain20=args.gain20, turnover=args.turnover, no_hot=args.no_hot)
+    screen_strategy(args.date, args.top_n, single_code=args.code)

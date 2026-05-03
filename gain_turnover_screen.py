@@ -51,7 +51,7 @@ from stock_trend.gain_turnover import (
 
 DEFAULT_TOP_N = 100
 DEFAULT_WORKERS = 8
-DEFAULT_OUTPUT_DIR = Path.home() / "stock_reports"
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 
 def screen_market(
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     output_text = format_signal_results(results, title)
     print("\n" + output_text)
 
-    output_path = Path(args.output) if args.output else DEFAULT_OUTPUT_DIR / f"daily_screen_{title_date}.txt"
+    output_path = Path(args.output) if args.output else OUTPUT_DIR / f"daily_screen_{title_date}.txt"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(output_text)

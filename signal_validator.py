@@ -163,11 +163,11 @@ def find_latest_screen_output() -> Optional[Path]:
     找昨日的选股结果文件（以文件内日期为准，而非文件修改时间）。
     16:40 执行时，今日 screening 大概率还在运行中，取前一天的输出最准确。
     """
-    reports_dir = Path.home() / 'stock_reports'
+    OUTPUT_DIR = Path(__file__).resolve().parent / "output"
     today = datetime.now()
-    candidates = list(reports_dir.glob('daily_screen_*.txt'))
+    candidates = list(OUTPUT_DIR.glob('daily_screen_*.txt'))
     # 也搜索 triple_screen
-    candidates.extend(reports_dir.glob('triple_screen_*.txt'))
+    candidates.extend(OUTPUT_DIR.glob('triple_screen_*.txt'))
     if not candidates:
         return None
 
@@ -742,7 +742,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", type=str, default=None, help="报告输出路径")
     args = parser.parse_args()
 
-    reports_dir = Path.home() / "stock_reports"
+    reports_dir = OUTPUT_DIR
 
     # ── 确定目标日期 ─────────────────────────────────────
     if args.date:
@@ -811,7 +811,7 @@ if __name__ == "__main__":
     if args.output:
         out = Path(args.output)
     else:
-        out = reports_dir / out_name
+        out = OUTPUT_DIR / out_name
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report_text, encoding="utf-8")
     print(f"\n💾 已写入: {out.resolve()}")

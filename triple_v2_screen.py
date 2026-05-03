@@ -9,7 +9,9 @@ Step3: gain_turnover 信号窗口启动（信号分仅含趋势+位置）
 
 综合评分：gain×0.6 + RPS综×0.2 + 趋势×0.2
 
-输出：~/stock_reports/triple_screen_YYYY-MM-DD.txt
+输出：./output/triple_screen_YYYY-MM-DD.txt
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 """
 
 import sys
@@ -537,7 +539,7 @@ def main():
 
     # 输出（路径与 gain_turnover_screen 保持一致）
     date_str = target_date.strftime("%Y-%m-%d") if target_date else datetime.now().strftime("%Y-%m-%d")
-    output_path = Path.home() / "stock_reports" / f"triple_screen_{date_str}.txt"
+    output_path = OUTPUT_DIR / f"triple_screen_{date_str}.txt"
 
     # 分类：启动型 vs 趋势跟随型
     startup = [r for r in results if r.total_gain_window > 10 and r.avg_turnover_5 > 3]

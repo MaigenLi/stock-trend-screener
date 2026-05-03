@@ -52,9 +52,9 @@ EMAIL_TO = _env.get("QQ_EMAIL", "920662304@qq.com")
 
 # ── 路径配置 ───────────────────────────────────────────
 WORKSPACE = Path(__file__).parent.parent.resolve()
-REPORTS_DIR = Path.home() / "stock_reports"
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 FONT_PATH = Path(__file__).parent.parent / "fonts" / "simhei.ttf"  # 本地字体（从Win挂载复制）
-TRACKER_CSV = WORKSPACE / "stock_trend" / "feedback_tracker.csv"
+TRACKER_CSV = OUTPUT_DIR.parent / "feedback_tracker.csv"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── PDF 字体 ─────────────────────────────────────────────
@@ -398,7 +398,7 @@ def get_tracker_stats() -> str:
 def build_pdf(today_str: str, screen_rows: list, val_full: str,
               val_rows: list, tracker_stats: str, index_data: list,
               top_sectors: list, bottom_sectors: list) -> Path:
-    output_path = REPORTS_DIR / f"closing_report_{today_str}.pdf"
+    output_path = OUTPUT_DIR / f"closing_report_{today_str}.pdf"
     story = []
 
     # 标题
@@ -644,7 +644,7 @@ def build_pdf(today_str: str, screen_rows: list, val_full: str,
     ))
 
     doc = SimpleDocTemplate(
-        str(output_path),
+        str(OUTPUT_DIR / f"closing_report_{today_str}.pdf"),
         pagesize=A4,
         leftMargin=MARGIN, rightMargin=MARGIN,
         topMargin=MARGIN, bottomMargin=MARGIN,

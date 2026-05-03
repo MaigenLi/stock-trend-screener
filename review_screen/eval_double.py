@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
 """
-eval_double.py — 评估 screen_double.py 信号的实际收益
-=====================================================
+eval_double.py — screen_double 信号评估
+===============================================================
 用法:
-  python eval_double.py --date 2026-04-29
-  python eval_double.py --date 2026-04-29 --top-n 100
+  python eval_double.py --date 2026-04-08              # 默认持有10天
+  python eval_double.py --date 2026-04-08 --hold-days 5
+  python eval_double.py --date 2026-04-08 --top-n 300
 
 原理:
-  screen_double.py --date D 产生的信号 = 在 D-1 日收盘后选出的股票
-  实际买入 = D-1+1 日（下一个交易日）开盘
-  实际卖出 = D-1+3 日（持有3天后）收盘
+  screen_double.py --date T 产生的信号 = T日收盘后选出的股票
+  实际买入 = T+1 日开盘
+  实际卖出 = T+hold_days 日收盘
+  持有交易日数 = hold_days - 1
 
-  例如: --date 2026-04-29
-    信号日 = 2026-04-24（上一个大交易日）
-    买入日 = 2026-04-27（T+1开盘）
-    卖出日 = 2026-04-29（T+3收盘）
-
-信号文件: ~/stock_reports/screen_double_{signal_date}.txt
+信号文件: ./output/screen_double_{signal_date}.txt
 """
 
-import sys, json, argparse, time, re
+import sys, json, argparse, time, re, unicodedata, subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -36,45 +33,12 @@ from stock_trend.gain_turnover import (
     normalize_symbol,
 )
 
-REPORTS_DIR = Path.home() / "stock_reports"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 # ── 交易日历 ─────────────────────────────────────────────
-_TRADING_DAYS = None
+from stock_trend.review_screen.date_utils import validate_signal_date, get_trading_days
 
-def get_trading_days():
-    """从已有 QFQ CSV 文件构建交易日历（降序）"""
-    global _TRADING_DAYS
-    if _TRADING_DAYS is not None:
-        return _TRADING_DAYS
-    cache = WORKSPACE / ".cache" / "qfq_daily"
-    dates = set()
-    for f in cache.glob("*_qfq.csv"):
-        df = pd.read_csv(f, usecols=["date"], nrows=1)
-        dates.update(pd.read_csv(f, usecols=["date"])["date"].tolist())
-    _TRADING_DAYS = sorted(set(dates))
-    return _TRADING_DAYS
-
-
-def prev_trading_day(date_str: str, n=1) -> str:
-    """返回 date_str 之前第 n 个交易日（date_str 本身不算）"""
-    days = get_trading_days()
-    try:
-        idx = days.index(date_str)
-    except ValueError:
-        # date_str 不在列表，查找最近的前一个交易日
-        idx = -1
-        for i, d in enumerate(days):
-            if d >= date_str:
-                idx = i - 1
-                break
-        if idx < 0:
-            idx = 0
-    # n=1 → 前一个交易日
-    result_idx = max(0, idx - n)
-    return days[result_idx]
-
-
-def next_trading_day(date_str: str, n=1) -> str:
+def next_n_trading_day(date_str: str, n: int) -> str:
     """返回 date_str 之后第 n 个交易日（不含 date_str 本身）"""
     days = get_trading_days()
     try:
@@ -100,7 +64,7 @@ def parse_screen_output(path: Path):
 
     txt = path.read_text(encoding="utf-8")
     for line in txt.splitlines():
-        parts = line.split()  # 空格分隔（中文对齐用空格填充）
+        parts = line.split()
         if len(parts) < 12:
             continue
         p0 = parts[0].strip()
@@ -124,82 +88,93 @@ def parse_screen_output(path: Path):
     return results
 
 
-# ── 收益评估 ─────────────────────────────────────────────
+# ── 收益评估 ───────────────────────────────
 def calc_return(code, buy_date, sell_date):
-    """计算持有三天收益：buy_date开盘买入，sell_date收盘卖出"""
+    """计算持有收益：buy_date开盘买入，sell_date收盘卖出"""
     df = load_qfq_history(normalize_symbol(code), end_date=sell_date)
     if df is None or len(df) < 2:
-        return None, "数据不足"
+        return None, None, None, "数据不足"
 
     df = df.sort_values("date").reset_index(drop=True)
     dates = df["date"].tolist()
     closes = df["close"].values
+    opens = df["open"].values if "open" in df.columns else None
 
-    # buy_date/sell_date 是字符串，dates 是 pandas.Timestamp 列表，需要转换
-    import pandas as pd
     buy_ts = pd.Timestamp(buy_date)
     sell_ts = pd.Timestamp(sell_date)
 
     try:
         buy_idx = dates.index(buy_ts)
     except ValueError:
-        return None, f"{buy_date}不在数据中"
+        return None, None, None, f"{buy_date}不在数据中"
 
-    # 前复权数据：用当天收盘代替开盘买入（近似）
-    buy_price = float(closes[buy_idx])
+    if opens is None:
+        return None, None, None, "缺少open字段"
+    buy_price = float(opens[buy_idx])
+    if buy_price <= 0:
+        return None, None, None, f"{buy_date}开盘价无效"
 
     try:
         sell_idx = dates.index(sell_ts)
     except ValueError:
-        return None, f"{sell_date}不在数据中"
+        return None, None, None, f"{sell_date}不在数据中"
     sell_price = float(closes[sell_idx])
+    if sell_price <= 0:
+        return None, None, None, f"{sell_date}收盘价无效"
 
     ret = (sell_price / buy_price - 1) * 100
-    return round(ret, 2), None
+    return round(ret, 2), round(buy_price, 2), round(sell_price, 2), None
 
 
 # ── 报告 ────────────────────────────────────────────────
-def eval_signal(sell_date: str, top_n: int = 250):
+def eval_signal(signal_date: str, top_n: int = 300, hold_days: int = 10):
     """
     评估 screen_double_{signal_date}.txt 的收益。
-    sell_date: 用户指定的卖出日期（持有3日后收盘卖出）
-    信号日: 卖出日的前3个交易日（T-3，收盘前筛选产生信号）
-    买入日: 信号日的下一个交易日（T+1开盘）
+    信号日 = T（screen_double --date 的日期）
+    买入日 = T+1（开盘）
+    卖出日 = T+hold_days（收盘，持有 hold_days-1 个交易日）
     """
-    # 信号日 = 卖出日的前3个交易日
-    signal_date = prev_trading_day(sell_date, n=3)
-    # 买入日 = 信号日的下一个交易日（T+1开盘）
-    buy_date = next_trading_day(signal_date, 1)
-
-    signal_file = REPORTS_DIR / f"screen_double_{signal_date}.txt"
+    signal_file = OUTPUT_DIR / f"screen_double_{signal_date}.txt"
 
     if not signal_file.exists():
-        print(f"❌ 信号文件不存在: {signal_file}")
-        print(f"   请先运行: screen_double.py --date {signal_date}")
-        return
+        print(f"⚠️  信号文件不存在: {signal_file}")
+        print(f"   正在自动运行 screen_double.py --date {signal_date} ...")
+        screen_py = WORKSPACE / "stock_trend" / "review_screen" / "screen_double.py"
+        result = subprocess.run(
+            [sys.executable, str(screen_py), "--date", signal_date],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"❌ screen_double.py 运行失败:\n{result.stderr}")
+            return
+        print(f"✅ screen_double.py 完成")
+        if not signal_file.exists():
+            print(f"❌ 仍无信号文件: {signal_file}")
+            return
+
+    buy_date = next_n_trading_day(signal_date, 1)
+    sell_date = next_n_trading_day(signal_date, hold_days)
 
     signals = parse_screen_output(signal_file)
     if not signals:
         print(f"❌ {signal_file.name} 中未解析到股票")
         return
 
+    hold_days_label = f"持有{hold_days - 1}交易日"
+    sell_col_label = f"T+{hold_days}收"
+
     print(f"📋 信号文件: {signal_file.name}")
-    print(f"   信号日（T-3）: {signal_date}  卖出日: {sell_date}")
-    print(f"   买入日（T+1）: {buy_date}（开盘）  持有3日后卖出: {sell_date}（收盘）")
+    print(f"   信号日（T）: {signal_date}  买入日（T+1开盘）: {buy_date}  卖出日（T+{hold_days}收盘）: {sell_date}")
     print(f"   候选股票: {len(signals)} 只（取前 {min(top_n, len(signals))} 只评估）\n")
 
-    names = load_stock_names()
     results = []
     errors = []
 
     for i, (code, name, sig_date, sig_close) in enumerate(signals[:top_n]):
-        ret, err = calc_return(code, buy_date, sell_date)
+        ret, buy_price, sell_price, err = calc_return(code, buy_date, sell_date)
         if err:
             errors.append((code, name, err))
             continue
-
-        # 信号日收盘价（参考）
-        sig_ret = round((ret / 100 + 1) * sig_close - sig_close, 2)
 
         results.append({
             "code": code,
@@ -208,8 +183,9 @@ def eval_signal(sell_date: str, top_n: int = 250):
             "sig_close": sig_close,
             "buy_date": buy_date,
             "sell_date": sell_date,
+            "buy_open": buy_price,
+            "sell_close": sell_price,
             "ret": ret,
-            "sig_ret": sig_ret,
         })
 
     if not results:
@@ -223,57 +199,85 @@ def eval_signal(sell_date: str, top_n: int = 250):
     win = [r for r in results if r["ret"] > 0]
     loss = [r for r in results if r["ret"] <= 0]
     avg = sum(rets) / len(rets)
+    gt20 = [r for r in results if r["ret"] > 20]
+    gt10 = [r for r in results if r["ret"] > 10]
+    gt0  = [r for r in results if r["ret"] > 0]
 
-    print(f"{'='*110}")
-    print(f"{'代码':<10}{'名称':<8}{'信号日':<12}{'信号价':>8} "
-          f"{'买入日':<12}{'卖出日':<12}{'持有3日收益':>12}  {'信号参考收益':>12}")
-    print(f"{'-'*110}")
+    # 每列宽度（手工指定，确保标题和数据完全对齐）
+    # 中文标签按双字符宽度换算：label_cells = len(label) * 2
+    W = [9, 10, 10, 9, 10, 9, 10, 9, 10]   # 代码 名称 信号日 信号价 买入日 买开 卖出日 卖收 T+10收 收益
+    def pad(v, w, right=False):
+        ev = sum(2 if unicodedata.east_asian_width(c) in ("W","F") else 1 for c in str(v))
+        return " " * max(0, w - ev) + str(v) if not right else str(v) + " " * max(0, w - ev)
+
+    def rpad(v, w):
+        return pad(v, w, right=True)
+
+    HDR = " ".join([
+        rpad("   代码", W[0]), rpad("  名称", W[1]), rpad("信号日", W[2]),
+        rpad("信号价", W[3]), rpad("买入日", W[4]), rpad("T+1开盘", W[5]),
+        rpad("卖出日", W[6]), rpad(sell_col_label, W[7]), rpad("收益", W[8]),
+    ])
+    print("═" * (sum(W) + len(W) - 1))
+    print(HDR)
+    print("─" * (sum(W) + len(W) - 1))
     for r in results:
-        tag = "🟢" if r["ret"] > 0 else "🔴"
-        print(f"{r['code']:<10}{r['name']:<8}{r['signal_date']:<12}"
-              f"{r['sig_close']:>8.2f} {r['buy_date']:<12}{r['sell_date']:<12}"
-              f"{tag}{r['ret']:>+7.2f}%   {r['sig_ret']:>+9.2f}%")
-    print(f"{'='*110}")
+        tag = "\U0001F7E2" if r["ret"] > 0 else "\U0001f534"
+        row = " ".join([
+            pad(r["code"], W[0]), pad(r["name"], W[1]), pad(r["signal_date"], W[2]),
+            rpad(r["sig_close"], W[3]), pad(r["buy_date"], W[4]), rpad(r["buy_open"], W[5]),
+            pad(r["sell_date"], W[6]), rpad(r["sell_close"], W[7]),
+            rpad(f"{tag}{r['ret']:>+7.2f}%", W[8]),
+        ])
+        print(row)
+    print("─" * (sum(W) + len(W) - 1))
+    print(f"{'='*94}")
 
     print(f"\n📊 评估汇总（{len(results)} 只 / {len(signals)} 只）")
-    print(f"   胜率: {len(win)}/{len(results)} = {len(win)/len(results)*100:.1f}%")
+    print(f"   胜率: {len(gt0)}/{len(results)} = {len(gt0)/len(results)*100:.1f}%")
+    print(f"   收益率>10%: {len(gt10)}/{len(results)} = {len(gt10)/len(results)*100:.1f}%")
+    print(f"   收益率>20%: {len(gt20)}/{len(results)} = {len(gt20)/len(results)*100:.1f}%")
     print(f"   平均收益: {avg:+.2f}%")
     print(f"   最大盈利: {max(rets):+.2f}%  ({[r['code'] for r in results if r['ret']==max(rets)][0]})")
     print(f"   最大亏损: {min(rets):+.2f}%  ({[r['code'] for r in results if r['ret']==min(rets)][0]})")
     if errors:
         print(f"\n   数据异常（{len(errors)} 只）: {[r[0] for r in errors[:5]]}")
 
-    # 保存结果
+    # 保存结果（供 analyze_winners.py 使用）
     out = {
         "signal_date": signal_date,
         "buy_date": buy_date,
         "sell_date": sell_date,
+        "hold_days": hold_days,
         "total_signals": len(signals),
         "evaluated": len(results),
-        "win_rate": round(len(win)/len(results)*100, 1),
+        "win_rate": round(len(gt0)/len(results)*100, 1),
         "avg_return": round(avg, 2),
         "results": results,
     }
-    json_path = REPORTS_DIR / f"eval_double_{signal_date}.json"
+    json_path = OUTPUT_DIR / f"eval_double_{signal_date}.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"\n💾 JSON已保存: {json_path}")
+    return out
 
 
 # ── CLI ────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="评估 screen_double.py 信号的实际持有收益")
-    parser.add_argument("--date", required=True, help="卖出日期（持有3日后的收盘日），如 2026-04-29")
-    parser.add_argument("--top-n", type=int, default=250, help="评估前N只（默认250）")
+    parser.add_argument("--date", required=True, help="信号日 T（screen_double --date 的日期），如 2026-04-08")
+    parser.add_argument("--hold-days", type=int, default=10, help="持有交易日数（默认10，即T+10收盘卖出）")
+    parser.add_argument("--top-n", type=int, default=300, help="评估前N只（默认300）")
     args = parser.parse_args()
+    validate_signal_date(args.date)
 
     print(f"\n{'='*60}")
-    print(f"  eval_double.py  —  收益评估")
-    print(f"  评估日期: {args.date}")
+    print(f"  eval_double.py  —  收益评估（持有{args.hold_days - 1}交易日）")
+    print(f"  信号日: {args.date}  hold_days: {args.hold_days}")
     print(f"{'='*60}\n")
 
     t0 = time.time()
-    eval_signal(args.date, args.top_n)
+    eval_signal(args.date, args.top_n, args.hold_days)
     print(f"\n⏱ 用时 {time.time()-t0:.1f}秒")
 
 

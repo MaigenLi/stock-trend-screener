@@ -21,6 +21,7 @@ import pandas as pd
 
 WORKSPACE = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
 from stock_trend.review_screen.data_cache import load_qfq_history, preload_all_codes
 from stock_trend.review_screen.indicators import compute_all, detect_volume_price_wave
@@ -353,7 +354,7 @@ if __name__ == "__main__":
     date_str_display = date_str
 
     # 输出路径
-    output_path = Path(args.output) if args.output else Path.home() / "stock_reports" / f"review_screen_{date_str}.txt"
+    output_path = Path(args.output) if args.output else OUTPUT_DIR / f"review_screen_{date_str}.txt"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 单日扫描（--days=1 或未指定时）

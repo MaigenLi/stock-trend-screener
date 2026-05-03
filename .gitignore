@@ -141,6 +141,9 @@ cython_debug/
 .DS_Store
 Thumbs.db
 
+# Runtime output (reports, logs, etc.) — symlink → /mnt/e/openclaw/output
+/output
+
 # Results and cache
 results/
 *.json
