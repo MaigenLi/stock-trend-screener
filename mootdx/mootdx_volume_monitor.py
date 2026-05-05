@@ -7,9 +7,7 @@ mootdx 实时行情监控脚本
 界面：终端原地刷新，不翻屏
 用法：
     python3 mootdx_volume_monitor.py \
-        --file output/screen_double_2026-04-30.json \
-        --date 2026-04-30 \
-        --interval 5
+        --date 2026-04-30    # 默认为今天，自动找最近交易日作基准
 """
 
 import json, argparse, sys, time, re, os
@@ -39,8 +37,9 @@ def parse_args():
     parser.add_argument("--file", "-f",
                         default="output/watchlist.EBK",
                         help="输入文件路径（支持 .json / .jsonl / .EBK），默认 output/watchlist.EBK")
-    parser.add_argument("--date", "-d", required=True,
-                        help="基准日期，格式 YYYY-MM-DD（昨日收盘日期）")
+    parser.add_argument("--date", "-d",
+                        default=datetime.now().strftime("%Y-%m-%d"),
+                        help="指定日期（默认今天），基准分时数据自动取该日期往前最近的240分钟交易日")
     parser.add_argument("--interval", "-i", type=int, default=5,
                         help="轮询间隔（秒），默认5秒")
     parser.add_argument("--vol-ratio", "-r", type=float, default=1.3,
@@ -154,6 +153,35 @@ def get_realtime(client, symbol: str, market: int) -> dict | None:
         return dict(result[0]) if result else None
     except Exception:
         return None
+
+
+def find_last_trading_day(reference_date: date_type) -> date_type:
+    """
+    从 reference_date 往前找最近一个有240分钟分时数据的交易日
+    跳过周末，一路往前试最多14天
+    用 get_history_minute_time_data（精确取指定日期的分时）
+    """
+    from datetime import timedelta
+    day = reference_date
+    for _ in range(14):
+        if day.weekday() >= 5:          # 跳过周末
+            day -= timedelta(days=1)
+            continue
+        date_int = day.year * 10000 + day.month * 100 + day.day
+        bars = get_history_minute_bar(date_int, "000001", 0)  # 用平安测试该日期
+        if len(bars) >= 230:             # 230根以上算有效交易日
+            return day
+        day -= timedelta(days=1)
+    return reference_date               # 兜底返回原日期
+
+
+def get_history_minute_bar(date_int: int, symbol: str, market: int) -> list:
+    """拉指定日期的历史分时，失败返回空列表"""
+    try:
+        client = get_client()
+        return client.client.get_history_minute_time_data(market, symbol, date_int)
+    except Exception:
+        return []
 
 
 # --------------------------------------------------------------------------- #
@@ -476,7 +504,15 @@ def render(records: list, cur_time: datetime, cur_idx: int) -> None:
 # --------------------------------------------------------------------------- #
 def main():
     args = parse_args()
-    target_date = datetime.strptime(args.date.strip(), "%Y-%m-%d").date()
+    today = datetime.strptime(args.date.strip(), "%Y-%m-%d").date()
+
+    # 自动检测最近交易日
+    last_trading = find_last_trading_day(today)
+    if last_trading < today:
+        print(f"📅 指定日期 {today} → 基准分时取最近交易日 {last_trading}",
+              flush=True)
+    else:
+        print(f"📅 基准分时日期：{last_trading}", flush=True)
 
     stocks = load_stocks(args.file)
     if not stocks:
@@ -487,19 +523,21 @@ def main():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 已连接 mootdx 服务器",
           flush=True)
     if not is_tty():
-        print("（注意：非交互式终端，输出将有 ANSI 转义序列）", flush=True)
+        print("（注意：非交互式终端，输出将有 ANSI 转义序列）",
+              flush=True)
 
-    # 预加载昨日分时
-    print(f"正在加载 {len(stocks)} 只股票的昨日分时数据...", flush=True)
+    # 预加载基准分时
+    print(f"正在加载 {len(stocks)} 只股票的分时数据（基准日 {last_trading}）...",
+          flush=True)
     yesterday_bars_map = {}
 
     for stock in stocks:
         code = stock["code"]
         mkt  = auto_market(code)
-        bars = get_yesterday_minute_bars(client, code, mkt, target_date)
+        bars = get_yesterday_minute_bars(client, code, mkt, last_trading)
         yesterday_bars_map[code] = bars
         print(f"  ✅ {code} {stock['name']}: "
-              f"昨日总成交量={total_vol(bars):,} ({len(bars)} 分钟棒)",
+              f"基准总成交量={total_vol(bars):,} ({len(bars)} 分钟棒)",
               flush=True)
 
     print(flush=True)
