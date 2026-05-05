@@ -37,8 +37,8 @@ def parse_args():
         description="mootdx 实时行情监控 — 分钟精度放量分析（原地刷新）"
     )
     parser.add_argument("--file", "-f",
-                        default="output/自选股.EBK",
-                        help="输入文件路径（支持 .json / .jsonl / .EBK），默认 output/自选股.EBK")
+                        default="output/watchlist.EBK",
+                        help="输入文件路径（支持 .json / .jsonl / .EBK），默认 output/watchlist.EBK")
     parser.add_argument("--date", "-d", required=True,
                         help="基准日期，格式 YYYY-MM-DD（昨日收盘日期）")
     parser.add_argument("--interval", "-i", type=int, default=5,
