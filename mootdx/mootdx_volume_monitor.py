@@ -12,7 +12,7 @@ mootdx 实时行情监控脚本
         --interval 5
 """
 
-import json, argparse, sys, time, re
+import json, argparse, sys, time, re, os
 from pathlib import Path
 from datetime import datetime, date as date_type
 
@@ -47,6 +47,11 @@ def parse_args():
                         help="放量判定阈值，默认1.3倍")
     parser.add_argument("--count", "-c", type=int, default=0,
                         help="查询次数，0=无限循环（默认）")
+    group = parser.add_argument_group("消息预警")
+    group.add_argument("--news", "-n", action="store_true",
+                        help="同时抓取个股重大公告/提示（港澳资讯最新提示，踩坑专用）")
+    group.add_argument("--tavily", "-t", action="store_true",
+                        help="开启 Tavily 网络新闻搜索（需 TAVILY_API_KEY 环境变量）")
     parser.add_argument("--output", "-o",
                         help="输出结果 JSON 文件路径")
     return parser.parse_args()
@@ -149,6 +154,84 @@ def get_realtime(client, symbol: str, market: int) -> dict | None:
         return dict(result[0]) if result else None
     except Exception:
         return None
+
+
+# --------------------------------------------------------------------------- #
+# 消息预警（踩坑检测）
+# --------------------------------------------------------------------------- #
+
+def get_company_news(client, market: int, code: str) -> str:
+    """
+    通过 mootdx 港澳资讯接口获取个股最新提示（重大公告/风险提示）
+    client: TdxHq_API 实例（直接有 get_company_info_category 方法）
+    返回摘要文本，失败返回空字符串
+    """
+    try:
+        cats = client.get_company_info_category(market, code)
+        if not cats:
+            return ""
+        # 找"最新提示"类别（通常第一个就是）
+        target = next((c for c in cats if "最新提示" in c.get("name", "")), cats[0])
+        content = client.get_company_info_content(
+            market, code,
+            target["filename"],
+            target["start"],
+            target["length"]
+        )
+        if not content:
+            return ""
+        # 提取前 300 字关键内容（去格式符号）
+        lines = [l.strip() for l in content.split("\n") if l.strip() and not l.strip().startswith("☆")]
+        # 取前 8 行非空行
+        excerpt = " ".join(lines[:8])
+        return excerpt[:300] if excerpt else ""
+    except Exception:
+        return ""
+
+
+def _get_tavily_key() -> str:
+    """从 openclaw.json 读取 Tavily API key"""
+    try:
+        p = Path.home() / ".openclaw" / "openclaw.json"
+        with open(p) as f:
+            d = json.load(f)
+        return (d["plugins"]["entries"]["tavily"]["config"]["webSearch"]["apiKey"] or "")
+    except Exception:
+        return ""
+
+
+def search_tavily_news(code: str, name: str, key: str = "") -> str:
+    """
+    用 Tavily API 搜索个股最新网络新闻/公告
+    key 优先用传入值，传入空则自动从 openclaw.json 读取
+    返回 AI 摘要字符串，失败返回空字符串
+    """
+    tavily_key = key.strip() or _get_tavily_key()
+    if not tavily_key:
+        return ""
+    try:
+        import urllib.request
+        query = f"{name} ({code}) 股票 最新公告 重大消息"
+        payload = json.dumps({
+            "api_key": tavily_key,
+            "query": query,
+            "search_depth": "basic",
+            "topic": "finance",
+            "max_results": 3,
+            "include_answer": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.tavily.com/search",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        answer = result.get("answer", "").strip()
+        return answer[:300] if answer else ""
+    except Exception:
+        return ""
 
 
 def current_minute_index(cur_time: datetime) -> int:
@@ -457,6 +540,14 @@ def main():
 
                 quote = quotes_map.get(code)
 
+                # ── 消息预警（踩坑检测）────────
+                news_excerpt = ""
+                tavily_answer = ""
+                if args.news:
+                    news_excerpt = get_company_news(client.client, mkt, code)
+                if args.tavily:
+                    tavily_answer = search_tavily_news(code, name)
+
                 # 今日累计成交量：优先用实时行情（准确），分时数据仅做后备
                 today_cum = cur_cum = 0
                 quote_vol = int(quote.get("vol") or 0) if quote else 0
@@ -515,6 +606,8 @@ def main():
                         "verdict":          verdict,
                     },
                     "error": None if quote else "获取实时数据失败",
+                    "news_excerpt": news_excerpt,
+                    "tavily_answer": tavily_answer,
                 })
 
                 if is_breakout:
