@@ -405,14 +405,28 @@ def main():
             records  = []
             breakouts = []
 
+            # 批量获取实时行情（一次 API 调用，大幅提速）
+            quotes_map = {}
+            try:
+                batch_codes = [(auto_market(s["code"]), s["code"]) for s in stocks]
+                batch_result = client.client.get_security_quotes(batch_codes)
+                for q in (batch_result or []):
+                    quotes_map[q["code"]] = q
+            except Exception:
+                pass
+
+            # 午休标识
+            is_lunch_break = (cur_idx < 0
+                              and cur_time.hour >= 11
+                              and cur_time.hour < 13)
+
             for stock in stocks:
                 code = stock["code"]
                 name = stock["name"]
                 yes_bars = yesterday_bars_map.get(code, [])
                 mkt = auto_market(code)
 
-                # 获取实时行情
-                quote = get_realtime(client, code, mkt)
+                quote = quotes_map.get(code)
 
                 # 今日累计成交量：优先用实时行情（准确），分时数据仅做后备
                 today_cum = cur_cum = 0
@@ -420,7 +434,6 @@ def main():
                 if quote_vol > 0:
                     today_cum = cur_cum = quote_vol
                 else:
-                    # 后备：从分时数据累加
                     today_bars = get_today_minute_bars(client, code, mkt)
                     if cur_idx >= 0:
                         cur_cum = cumsum_at(today_bars, cur_idx)
@@ -434,12 +447,18 @@ def main():
                     ratio_val  = (cur_cum / yes_cumsum) if yes_cumsum > 0 else 0.0
                     is_breakout = cur_cum > threshold
                     verdict = "放量" if is_breakout else "未放量"
+                elif is_lunch_break:
+                    yes_cumsum = 0
+                    threshold  = 0
+                    ratio_val  = 0.0
+                    is_breakout = False
+                    verdict = "休市"
                 else:
                     yes_cumsum = 0
                     threshold  = 0
                     ratio_val  = 0.0
                     is_breakout = False
-                    verdict = ("无参考" if cur_idx < 0 else "无昨日"
+                    verdict = ("盘前/盘后" if cur_idx < 0 else "无昨日"
                                if not yes_bars else "---")
 
                 records.append({
