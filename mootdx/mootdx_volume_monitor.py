@@ -395,6 +395,7 @@ def main():
     count = 0
     try:
         while True:
+            cycle_start = time.time()
             count += 1
             cur_time = datetime.now()
             cur_idx  = current_minute_index(cur_time)
@@ -494,7 +495,10 @@ def main():
                       flush=True)
                 break
 
-            time.sleep(args.interval)
+            # 精确间隔：从本周期开始时间算起
+            elapsed = time.time() - cycle_start
+            if elapsed < args.interval:
+                time.sleep(args.interval - elapsed)
 
     except KeyboardInterrupt:
         print(f"\n监控已停止（Ctrl+C）。共查询 {count} 次。\n",
