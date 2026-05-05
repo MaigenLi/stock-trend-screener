@@ -36,8 +36,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="mootdx 实时行情监控 — 分钟精度放量分析（原地刷新）"
     )
-    parser.add_argument("--file", "-f", required=True,
-                        help="输入 JSON 或 JSONL 文件路径（含 code/name 字段）")
+    parser.add_argument("--file", "-f",
+                        default="output/自选股.EBK",
+                        help="输入文件路径（支持 .json / .jsonl / .EBK），默认 output/自选股.EBK")
     parser.add_argument("--date", "-d", required=True,
                         help="基准日期，格式 YYYY-MM-DD（昨日收盘日期）")
     parser.add_argument("--interval", "-i", type=int, default=5,
@@ -59,9 +60,37 @@ def auto_market(code: str) -> int:
 
 
 def load_stocks(path: str) -> list[dict]:
+    """
+    支持格式：
+    - .json  / .jsonl → JSON 数组或逐行 JSON
+    - .EBK / .ebk     → 通达信自选股导出（二进制 ASCII）
+      格式：\r\n + [0|1] + XXXXXX + \r\n  (市场 0=深 1=沪 + 6位代码)
+    """
     p = Path(path)
     if not p.is_absolute():
         p = Path.cwd() / path
+
+    # ── EBK 格式 ──
+    if p.suffix.lower() in (".ebk",):
+        raw_bytes = p.read_bytes()
+        text = raw_bytes.decode("ascii", errors="ignore")
+        codes = [
+            t[1:] for t in text.split("\r\n")
+            if len(t) == 7 and t[0] in "01"
+        ]
+        codes = list(dict.fromkeys(codes))
+        # 从名称库查找股票名
+        names_cache = {}
+        try:
+            # gain_turnover 在 stock_trend 目录下
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from gain_turnover import load_stock_names as _load_names
+            names_cache = _load_names()
+        except Exception:
+            pass
+        return [{"code": c, "name": names_cache.get(c, "")} for c in codes]
+
+    # ── JSON / JSONL ──
     raw = p.read_text().strip()
 
     if raw.startswith("["):
