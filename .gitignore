@@ -143,6 +143,7 @@ Thumbs.db
 
 # Runtime output (reports, logs, etc.) — symlink → /mnt/e/openclaw/output
 /output
+.monitor_backtest.lock
 
 # Results and cache
 results/

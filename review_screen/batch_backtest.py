@@ -268,7 +268,7 @@ def run_batch(args):
                 continue
             print(f"[{i}/{len(dates)}] 🔄 运行 eval_double --date {date} --hold-days {args.hold_days}")
             try:
-                entry = ed.eval_signal(date, top_n=args.top_n, hold_days=args.hold_days)
+                entry = ed.eval_signal(date, top_n=args.top_n, hold_days=args.hold_days, stop_loss=args.stop_loss)
                 if entry:
                     all_results.append({"date": date, **entry})
                 else:
@@ -397,6 +397,7 @@ def main():
     parser.add_argument("--top-n", type=int, default=300, help="每个信号日评估前N只")
     parser.add_argument("--threshold", type=float, default=20.0, help="共性分析收益阈值")
     parser.add_argument("--hold-days", type=int, default=10, help="持有交易日数（默认10）")
+    parser.add_argument("--stop-loss", action="store_true", help="启用止损（-8%硬止损 + MA10跌破止损）")
     parser.add_argument("--run", action="store_true", help="重新运行评估（不加则只读现有JSON）")
     parser.add_argument("--mode", default="normal", choices=["normal", "accelerated", "winner"],
                         help="screen_double 条件3模式（默认 normal）")
