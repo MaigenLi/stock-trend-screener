@@ -487,11 +487,14 @@ def check_base(code, signal_date):
                    and d5 == 1 and d10 == 1 and d20 == 1 and d60 == 1)
 
     mode = _CLI_MODE
+    mode_used = None
     if mode == "winner":
         if not winner_path: return None
+        mode_used = "winner"
     else:
         # normal / accelerated：均接受 normal_path OR accelerated_path（两选一即通过）
         if not (normal_path or accelerated_path): return None
+        mode_used = "normal" if normal_path else "accelerated"
 
     # ── 条件4：收盘价 > MA10 ─────────────────────────────────
     if not (close_T > ma10): return None
@@ -544,6 +547,7 @@ def check_base(code, signal_date):
 
     return {
         "code": code, "signal_date": signal_date,
+        "mode_used": mode_used,
         "close": round(close_T,2),
         "ma5": round(ma5,2), "ma10": round(ma10,2),
         "ma20": round(ma20,2), "ma60": round(ma60,2),
@@ -791,6 +795,8 @@ def screen_strategy(target_date, top_n=20, single_code=None):
         print(f"  板块: {sector}  热点: {is_hot}", flush=True)
         print(f"\n  第一层: {'✅ 通过' if passed else '❌ 失败'}", flush=True)
         if passed:
+            mode_label = {"normal": "NORMAL（4线同向）", "accelerated": "ACCELERATED（加速模式）", "winner": "WINNER（空间有序）"}.get(sig.get('mode_used', ''), sig.get('mode_used', 'unknown'))
+            print(f"  通过模式: {mode_label}", flush=True)
             print(f"  第二层评分: {score}分", flush=True)
             print(f"  详细原因: {' | '.join(reasons)}", flush=True)
             print(f"  RPS综合: {sig.get('rps_composite', 0):.0f}", flush=True)

@@ -525,9 +525,9 @@ def watch_loop(args, yesterday: dict, all_codes: list):
 # ═══════════════════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(description="全市场放量实时监控（分钟级精度）")
-    parser.add_argument("--top", "-n", type=int, default=10, help="显示前 N 只（默认10）")
+    parser.add_argument("--top", "-n", type=int, default=20, help="显示前 N 只（默认20）")
     parser.add_argument("--ratio", "-r", type=float, default=1.5, help="放量最低阈值（默认1.5x）")
-    parser.add_argument("--max-ratio", "-M", type=float, default=0, help="放量最高阈值（0=不限制，排除超过此值的股票）")
+    parser.add_argument("--max-ratio", "-M", type=float, default=20, help="放量最高阈值（0=不限制，排除超过此值的股票）")
     parser.add_argument("--interval", "-i", type=int, default=300, help="刷新间隔（秒，默认300）")
     parser.add_argument("--once", action="store_true", help="单次扫描（不复刷新）")
     parser.add_argument("--preload-workers", type=int, default=_DEFAULT_PRELOAD_WORKERS,
