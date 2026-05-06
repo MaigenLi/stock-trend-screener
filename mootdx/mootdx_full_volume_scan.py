@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 全市场放量实时监控（分钟级精度）
-用法：python3 full_market_volume_scan.py [--top N] [--ratio R] [--interval S]
+用法：python3 mootdx_full_volume_scan.py [--top N] [--ratio R] [--interval S]
 
 与 mootdx_volume_monitor.py 同架构：
   昨日分时逐分钟累计 vs 今日实时累计量，同分钟点精确对比
@@ -365,8 +365,12 @@ def compute_ratio_from_minute(code_raw: str, quote: dict, cur_idx: int,
 # 单轮扫描
 # ═══════════════════════════════════════════════════════════
 def scan_cycle(quotes: dict, yesterday: dict, cur_time: datetime,
-               cur_idx: int, ratio_threshold: float) -> list[dict]:
-    """一轮全市场扫描，返回按量比排序的结果列表"""
+               cur_idx: int, ratio_threshold: float,
+               max_ratio: float = 0, exclude_st: bool = False) -> list[dict]:
+    """一轮全市场扫描，返回按量比排序的结果列表
+    max_ratio: 0=不限制, >0=排除超过此值的股票
+    exclude_st: True=排除名称含ST/st的股票
+    """
     results = []
     for code_raw, q in quotes.items():
         if q["vol"] <= 0:
@@ -375,10 +379,17 @@ def scan_cycle(quotes: dict, yesterday: dict, cur_time: datetime,
         r = compute_ratio_from_minute(code_raw, q, cur_idx, yd)
         if r is None:
             continue
+        # ST 过滤
+        name = yd["name"] if yd else ""
+        if exclude_st and ("ST" in name or "st" in name):
+            continue
+        # 最高量比限制
+        if max_ratio > 0 and r > max_ratio:
+            continue
         last_close = q.get("last_close", 0) or (yd.get("last_close", 0) if yd else 0)
         results.append({
             "code": code_raw,
-            "name": yd["name"] if yd else "",
+            "name": name,
             "last_close": last_close,
             "open": q["open"],
             "price": q["price"],
@@ -448,7 +459,8 @@ def scan_once(args, yesterday: dict, all_codes: list):
         return
     cur_time = datetime.now()
     cur_idx = current_minute_index(cur_time)
-    results = scan_cycle(quotes, yesterday, cur_time, cur_idx, args.ratio)
+    results = scan_cycle(quotes, yesterday, cur_time, cur_idx, args.ratio,
+                        args.max_ratio, True)
     breakouts = [r for r in results if r["vol_ratio"] >= args.ratio]
     display = breakouts[:args.top] if breakouts else results[:args.top]
     render_top(display, cur_time, cur_idx, args,
@@ -490,7 +502,8 @@ def watch_loop(args, yesterday: dict, all_codes: list):
                 time.sleep(5)
                 continue
 
-            results = scan_cycle(quotes, yesterday, cur_time, cur_idx, args.ratio)
+            results = scan_cycle(quotes, yesterday, cur_time, cur_idx, args.ratio,
+                                args.max_ratio, True)
             breakouts = [r for r in results if r["vol_ratio"] >= args.ratio]
             display = breakouts[:args.top] if breakouts else results[:args.top]
 
@@ -513,7 +526,8 @@ def watch_loop(args, yesterday: dict, all_codes: list):
 def main():
     parser = argparse.ArgumentParser(description="全市场放量实时监控（分钟级精度）")
     parser.add_argument("--top", "-n", type=int, default=10, help="显示前 N 只（默认10）")
-    parser.add_argument("--ratio", "-r", type=float, default=1.5, help="放量阈值（默认1.5x）")
+    parser.add_argument("--ratio", "-r", type=float, default=1.5, help="放量最低阈值（默认1.5x）")
+    parser.add_argument("--max-ratio", "-M", type=float, default=0, help="放量最高阈值（0=不限制，排除超过此值的股票）")
     parser.add_argument("--interval", "-i", type=int, default=300, help="刷新间隔（秒，默认300）")
     parser.add_argument("--once", action="store_true", help="单次扫描（不复刷新）")
     parser.add_argument("--preload-workers", type=int, default=_DEFAULT_PRELOAD_WORKERS,
