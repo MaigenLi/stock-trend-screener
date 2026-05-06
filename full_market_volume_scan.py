@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """
-全市场放量实时监控
+全市场放量实时监控（分钟级精度）
 用法：python3 full_market_volume_scan.py [--top N] [--ratio R] [--interval S]
 
-说明：
-  实时扫描全市场放量股票，用今日实时累计量 vs 昨日全天量按时间比例估算
-  量比 = 今日累计量 / (昨日全天量 × 已过分钟数/240)
+与 mootdx_volume_monitor.py 同架构：
+  昨日分时逐分钟累计 vs 今日实时累计量，同分钟点精确对比
+  量比 = 今日到N分钟累计量 / 昨日到N分钟累计量
   放量判定：量比 ≥ ratio（默认 1.5x）
 
-  实时行情通过 mootdx 批量获取，终端原地刷新
-
 用法示例：
-  python3 full_market_volume_scan.py                        # 默认 Top10, 5分钟刷新
-  python3 full_market_volume_scan.py --top 20 --ratio 2.0   # Top20, 2x放量阈值
-  python3 full_market_volume_scan.py --once                 # 单次扫描（不复刷新）
+  python3 full_market_volume_scan.py                        # Top10, 5分钟刷新
+  python3 full_market_volume_scan.py --top 20 --ratio 2.0   # Top20, 2x阈值
+  python3 full_market_volume_scan.py --once                 # 单次扫描
 """
 
 import argparse, re, sys, time
 from pathlib import Path
 from datetime import datetime, date as date_type, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future as _Future
+import threading
 import json
 
 import pandas as pd
@@ -30,16 +29,19 @@ sys.path.insert(0, str(WORKSPACE))
 from stock_trend import gain_turnover as gt
 
 # ═══════════════════════════════════════════════════════════
-# mootdx 常量
+# 常量
 # ═══════════════════════════════════════════════════════════
 MARKET_BY_CODE = {
     1: lambda c: c.startswith(("6", "9")),
     0: lambda c: c and c[0] in ("0", "1", "2", "3"),
 }
 TOTAL_MINUTES = 240
+BATCH_SIZE = 80
 CLEAR_SCREEN = "\033[2J\033[H"
 CLEAR_LINE   = "\033[2K"
 _ansi_pat = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\[K")
+
+_DEFAULT_PRELOAD_WORKERS = 8
 
 
 def auto_market(code: str) -> int:
@@ -50,7 +52,7 @@ def auto_market(code: str) -> int:
 
 
 # ═══════════════════════════════════════════════════════════
-# 终端显示（与 mootdx_volume_monitor.py 完全相同）
+# 终端显示（与 mootdx_volume_monitor 完全一致）
 # ═══════════════════════════════════════════════════════════
 def cjk_width(s: str) -> int:
     w = 0
@@ -88,23 +90,10 @@ def strip_ansi(s: str) -> str:
     return _ansi_pat.sub("", s)
 
 
-# 列定义
-W_CODE  = 6
-W_NAME  = 8
-W_LAST  = 7
-W_OPEN  = 7
-W_PRICE = 8
-W_VOL   = 12
-W_RATIO = 8
-W_FLAG  = 10
-
-GAP_CODE_NAME = 2
-GAP_NAME_LAST = 2
-GAP_LAST_OPEN = 2
-GAP_OPEN_PRICE = 2
-GAP_PRICE_VOL = 3
-GAP_VOL_RATIO  = 4
-GAP_RATIO_FLAG = 4
+W_CODE  = 6; W_NAME  = 8; W_LAST  = 7; W_OPEN  = 7
+W_PRICE = 8; W_VOL   = 12; W_RATIO = 8; W_FLAG  = 10
+GAP_CODE_NAME = 2; GAP_NAME_LAST = 2; GAP_LAST_OPEN = 2
+GAP_OPEN_PRICE = 2; GAP_PRICE_VOL = 3; GAP_VOL_RATIO = 4; GAP_RATIO_FLAG = 4
 
 SEP_TOTAL = (
     cjk_width("代码") + GAP_CODE_NAME + W_NAME + GAP_NAME_LAST
@@ -133,24 +122,18 @@ def hdr_line() -> str:
 
 
 def data_line(code: str, name: str, last_close, today_open,
-              price, vol: int, ratio: float, is_breakout: bool,
-              label: str = "") -> str:
+              price, vol: int, ratio: float, is_breakout: bool) -> str:
     flag = "✅" if is_breakout else "  "
     verdict = " OK" if is_breakout else "NO "
-
     price_str = f"{price:>{W_PRICE}.2f}" if price else f"{'N/A':>{W_PRICE}}"
     vol_str   = f"{int(vol):>{W_VOL},}" if vol else f"{'N/A':>{W_VOL}}"
     ratio_str = f"{ratio:>{W_RATIO}.2f}x" if ratio else f"{'N/A':>{W_RATIO}}"
     last_str  = f"{last_close:>{W_LAST}.2f}" if last_close else f"{'N/A':>{W_LAST}}"
     open_str  = f"{today_open:>{W_OPEN}.2f}" if today_open else f"{'N/A':>{W_OPEN}}"
-
     chg_str = ""
     if price and last_close:
         pct = (price - last_close) / last_close * 100
         chg_str = f" ({pct:+.1f}%)"
-
-    label_str = f" {label}" if label else ""
-
     return (
         f"{CLEAR_LINE}"
         f"{pad_to_width(code, W_CODE)}{' ' * GAP_CODE_NAME}"
@@ -160,7 +143,7 @@ def data_line(code: str, name: str, last_close, today_open,
         f"{price_str}{' ' * GAP_PRICE_VOL}"
         f"{vol_str}{' ' * GAP_VOL_RATIO}"
         f"{ratio_str}{' ' * GAP_RATIO_FLAG}"
-        f"{flag} {verdict}{chg_str}{label_str}"
+        f"{flag} {verdict}{chg_str}"
     )
 
 
@@ -192,110 +175,218 @@ def minute_to_str(idx: int) -> str:
 
 
 # ═══════════════════════════════════════════════════════════
-# 基线数据预加载（昨日全天成交量，来自 qfq 缓存）
+# 寻找上一交易日
 # ═══════════════════════════════════════════════════════════
+_holidays_2026 = {
+    date_type(2026, 5, 1), date_type(2026, 5, 2), date_type(2026, 5, 3),
+    date_type(2026, 5, 4), date_type(2026, 5, 5),
+}
+
+
 def find_last_trading_day(reference_date: date_type) -> date_type:
-    """从 reference_date 往回找最近一个交易日（简单跳过周末和五一）"""
-    from datetime import timedelta
-    day = reference_date
-    holidays_2026 = {
-        date_type(2026, 5, 1), date_type(2026, 5, 2), date_type(2026, 5, 3),
-        date_type(2026, 5, 4), date_type(2026, 5, 5),
-    }
+    day = reference_date - timedelta(days=1)
     for _ in range(14):
-        if day.weekday() >= 5 or day in holidays_2026:
+        if day.weekday() >= 5 or day in _holidays_2026:
             day -= timedelta(days=1)
             continue
         return day
     return reference_date
 
 
-def preload_baseline(codes: list, names_cache: dict) -> dict:
+# ═══════════════════════════════════════════════════════════
+# 昨日分时数据预加载（分钟精度，与 mootdx_volume_monitor 相同）
+# ═══════════════════════════════════════════════════════════
+def _fetch_yesterday_minute(code: str, yesterday_date: date_type,
+                            client) -> list | None:
     """
-    预加载所有股票的昨日数据：昨收、昨全天量
-    返回 {code_lower: {"last_close": float, "yesterday_vol": int, "name": str}}
+    获取单只股票昨日的 240 分钟累计量数组
+    返回 list[int]（长度 240, 每元素为到该分钟为止的累计量），失败返回 None
     """
+    mkt = auto_market(code)
+    date_int = (yesterday_date.year * 10000
+                + yesterday_date.month * 100
+                + yesterday_date.day)
+    try:
+        bars = client.get_history_minute_time_data(mkt, code, date_int)
+        if not bars or len(bars) < 200:  # 至少200分钟有效
+            return None
+        cum = []
+        running = 0
+        for b in bars:
+            running += int(b.get("vol") or 0)
+            cum.append(running)
+        return cum
+    except Exception:
+        return None
+
+
+def preload_yesterday_bars(all_codes: list, names_cache: dict,
+                           yesterday_date: date_type,
+                           max_workers: int = _DEFAULT_PRELOAD_WORKERS) -> dict:
+    """
+    预加载全市场昨日分时累计量（并行，mootdx）
+    返回 {code: {"cum": [240 ints], "name": str, "last_close": float, "yesterday_total": int}}
+    失败股票不在字典中（后续回退到 qfq 日线近似）
+    """
+    from mootdx.quotes import Quotes
+
     t0 = time.time()
-    baseline = {}
-    ref_date = datetime.now().date()
-    last_trading = find_last_trading_day(ref_date)
-    today_str = ref_date.strftime("%Y-%m-%d")
-    print(f"📅 基准交易日: {last_trading}  |  今日: {today_str}")
+    result = {}
+    total = len(all_codes)
+    done = [0]
+    lock = threading.Lock()
 
-    for code in codes:
-        try:
-            c = gt.normalize_prefixed(code)
-            df = gt.load_qfq_history(c, refresh=False)
-            if df is None or len(df) < 2:
-                continue
-            latest = df.iloc[-1]
-            prev = df.iloc[-2]
-            latest_date = str(latest.get("date", ""))[:10]
+    # 也加载 qfq 日线基线（昨收 + 备用量）
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    daily_fallback = {}
 
-            # 取昨日（上一交易日）的 bar
-            if latest_date >= today_str:
-                yesterday_bar = prev
-            else:
-                yesterday_bar = latest
+    def _worker(code):
+        nonlocal daily_fallback
+        raw = code.lower()
+        for pfx in ("sh", "sz", "bj"):
+            if raw.startswith(pfx):
+                raw = raw[2:]
+                break
+        c = gt.normalize_prefixed(code)
+        client = Quotes.factory(market="std")
+        cum = _fetch_yesterday_minute(raw, yesterday_date, client.client)
+        if cum:
+            # 昨日总成交量（最后一分钟累计）
+            yesterday_total = cum[-1] if cum else 0
+            # 昨收从 qfq 缓存取
+            last_close = 0.0
+            try:
+                df = gt.load_qfq_history(c, refresh=False)
+                if df is not None and len(df) >= 1:
+                    last_date = str(df["date"].iloc[-1])[:10]
+                    if last_date >= today_str and len(df) >= 2:
+                        last_close = float(df["close"].iloc[-2])
+                    else:
+                        last_close = float(df["close"].iloc[-1])
+            except Exception:
+                pass
+            with lock:
+                result[raw] = {
+                    "cum": cum,
+                    "name": names_cache.get(code, ""),
+                    "last_close": last_close,
+                    "yesterday_total": yesterday_total,
+                }
 
-            # 去前缀，与 mootdx 返回格式对齐（如 sh600000 → 600000）
-            raw_code = code.lower()
-            for pfx in ("sh", "sz", "bj"):
-                if raw_code.startswith(pfx):
-                    raw_code = raw_code[2:]
-                    break
+    # 并行执行（每线程独立 mootdx client）
+    workers = min(max_workers, len(all_codes))
+    print(f"📥 预加载昨日 {yesterday_date} 分时数据（{len(all_codes)} 只, {workers} 线程）...")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_worker, code): code for code in all_codes}
+        for future in as_completed(futures):
+            done[0] += 1
+            if done[0] % 500 == 0 or done[0] == total:
+                elapsed = time.time() - t0
+                eta = elapsed / done[0] * (total - done[0])
+                print(f"  进度: {done[0]}/{total} ({done[0]/total*100:.0f}%) "
+                      f"耗时={elapsed:.0f}s ETA={eta:.0f}s 已获取={len(result)}只",
+                      end="\r", flush=True)
 
-            baseline[raw_code] = {
-                "last_close": float(yesterday_bar["close"]),
-                "yesterday_vol": int(yesterday_bar["volume"]),
-                "name": names_cache.get(code, ""),
-            }
-        except Exception:
-            continue
-
-    print(f"✅ 基线预加载: {len(baseline)} 只, 耗时 {time.time()-t0:.1f}s")
-    return baseline
+    print(f"\n✅ 昨日分时预加载: {len(result)} 只（{total - len(result)} 只待回退）, "
+          f"耗时 {time.time()-t0:.1f}s")
+    return result
 
 
 # ═══════════════════════════════════════════════════════════
-# 实时行情获取（mootdx 批量）
+# 实时行情获取（mootdx 分块批量）
 # ═══════════════════════════════════════════════════════════
 def get_mootdx_client():
     from mootdx.quotes import Quotes
     return Quotes.factory(market="std")
 
 
-BATCH_SIZE = 80  # mootdx get_security_quotes 单次上限
-
-
 def fetch_all_realtime(all_codes: list) -> dict:
     """
-    通过 mootdx 分块获取全市场实时行情（单次上限 80 只）
-    返回 {code_lower: {"price":, "open":, "vol":, "amount":, "last_close":}}
+    通过 mootdx 分块获取全市场实时行情
+    返回 {code: {"price": float, "open": float, "vol": int, "last_close": float}}
     """
     client = get_mootdx_client()
     quotes = {}
     total = len(all_codes)
-
     for start in range(0, total, BATCH_SIZE):
         chunk = all_codes[start:start + BATCH_SIZE]
         batch = [(auto_market(c), c) for c in chunk]
         try:
-            result = client.client.get_security_quotes(batch)
-            for q in (result or []):
+            bresult = client.client.get_security_quotes(batch)
+            for q in (bresult or []):
                 code = q.get("code", "")
                 quotes[code.lower()] = {
                     "price": float(q.get("price") or 0),
                     "open": float(q.get("open") or 0),
                     "vol": int(q.get("vol") or 0),
-                    "amount": float(q.get("amount") or 0),
                     "last_close": float(q.get("last_close") or 0),
                 }
-        except Exception as e:
-            # 单批次失败不影响其他批次
+        except Exception:
             pass
-
     return quotes
+
+
+# ═══════════════════════════════════════════════════════════
+# 量比计算（分钟精度 + 日线回退）
+# ═══════════════════════════════════════════════════════════
+def compute_ratio_from_minute(code_raw: str, quote: dict, cur_idx: int,
+                              yesterday_data: dict | None) -> float | None:
+    """
+    计算量比（精确到当前分钟）
+    优先用昨日分时累计数组做同分钟对比
+    回退到日线比例估算
+    返回量比（float），数据不足返回 None
+    """
+    today_vol = quote.get("vol", 0)
+    if today_vol <= 0:
+        return None
+
+    # ── 分钟精度 ──────────────────────────────────────
+    if yesterday_data is not None and "cum" in yesterday_data:
+        cum = yesterday_data["cum"]
+        cap = min(cur_idx, len(cum) - 1)
+        if cap >= 0:
+            yes_cum = cum[cap]
+            if yes_cum > 0:
+                return today_vol / yes_cum
+
+    # ── 回退：日线比例 ────────────────────────────────
+    yesterday_total = yesterday_data.get("yesterday_total", 0) if yesterday_data else 0
+    if yesterday_total > 0:
+        day_frac = (cur_idx + 1) / TOTAL_MINUTES if cur_idx >= 0 else 1.0
+        expected = yesterday_total * day_frac
+        if expected > 0:
+            return today_vol / expected
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════
+# 单轮扫描
+# ═══════════════════════════════════════════════════════════
+def scan_cycle(quotes: dict, yesterday: dict, cur_time: datetime,
+               cur_idx: int, ratio_threshold: float) -> list[dict]:
+    """一轮全市场扫描，返回按量比排序的结果列表"""
+    results = []
+    for code_raw, q in quotes.items():
+        if q["vol"] <= 0:
+            continue
+        yd = yesterday.get(code_raw)
+        r = compute_ratio_from_minute(code_raw, q, cur_idx, yd)
+        if r is None:
+            continue
+        last_close = q.get("last_close", 0) or (yd.get("last_close", 0) if yd else 0)
+        results.append({
+            "code": code_raw,
+            "name": yd["name"] if yd else "",
+            "last_close": last_close,
+            "open": q["open"],
+            "price": q["price"],
+            "vol": q["vol"],
+            "vol_ratio": round(r, 2),
+        })
+    results.sort(key=lambda x: x["vol_ratio"], reverse=True)
+    return results
 
 
 # ═══════════════════════════════════════════════════════════
@@ -303,18 +394,16 @@ def fetch_all_realtime(all_codes: list) -> dict:
 # ═══════════════════════════════════════════════════════════
 def render_top(top_data: list, cur_time: datetime, cur_idx: int,
                args, breakout_count: int, total_scanned: int,
-               cycle: int, cycle_elapsed: float):
-    """终端原地刷新 Top N 表格"""
+               cycle: int, cycle_elapsed: float, yesterday: dict):
     lines = []
     now_str = cur_time.strftime("%H:%M:%S")
     minute_label = minute_to_str(cur_idx)
-    day_fraction = min(cur_idx + 1, TOTAL_MINUTES) / TOTAL_MINUTES * 100 if cur_idx >= 0 else 0
+    coverage = len(yesterday)
 
-    # 标题行
     title1 = (
-        f"全市场放量监控  |  {now_str} [{minute_label}]  "
-        f"进度 {day_fraction:.0f}%  |  "
+        f"全市场放量监控 [分钟级]  |  {now_str} [{minute_label}]  |  "
         f"有效 {total_scanned}只  |  "
+        f"分钟数据 {coverage}只  |  "
         f"放量 {breakout_count}只  |  "
         f"阈值 ≥{args.ratio}x  |  "
         f"第{cycle}轮  {cycle_elapsed:.1f}s"
@@ -322,98 +411,60 @@ def render_top(top_data: list, cur_time: datetime, cur_idx: int,
     pad = SEP_TOTAL - cjk_width(title1)
     if pad > 0:
         title1 += " " * (pad // 2)
-
     lines.append(title1)
     lines.append(sep_line())
     lines.append(hdr_line())
     lines.append(sep_line())
-
     for r in top_data:
         lines.append(data_line(
-            r["code"], r["name"],
-            r["last_close"], r["open"],
-            r["price"], r["vol"],
-            r["vol_ratio"], r["vol_ratio"] >= args.ratio,
+            r["code"], r["name"], r["last_close"], r["open"],
+            r["price"], r["vol"], r["vol_ratio"],
+            r["vol_ratio"] >= args.ratio,
         ))
-
     lines.append(sep_line())
-
-    # 汇总行
     footer = (
-        f"总计：{total_scanned} 只  |  "
-        f"量OK：{breakout_count}  |  "
+        f"总计：{total_scanned} 只  |  量OK：{breakout_count}  |  "
         f"量NO：{total_scanned - breakout_count}  |  "
-        f"按 Ctrl+C 退出"
+        f"昨日 ▶ 今日 同分钟累计对比  |  Ctrl+C 退出"
     )
     pad = SEP_TOTAL - cjk_width(strip_ansi(footer))
     if pad > 0:
         footer += " " * pad
     lines.append(f"{CLEAR_LINE}{footer}")
-
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.write("\n".join(lines) + "\n")
     sys.stdout.flush()
 
 
 # ═══════════════════════════════════════════════════════════
-# 单次扫描（--once 模式）
+# --once 模式
 # ═══════════════════════════════════════════════════════════
-def scan_once(args, baseline: dict):
-    """单次全市场扫描并输出"""
+def scan_once(args, yesterday: dict, all_codes: list):
     t0 = time.time()
     print("🚀 获取实时行情...")
-    quotes = fetch_all_realtime(list(baseline.keys()))
+    quotes = fetch_all_realtime(all_codes)
     if not quotes:
         print("❌ 无法获取实时行情")
         return
-
     cur_time = datetime.now()
     cur_idx = current_minute_index(cur_time)
-    day_frac = min(cur_idx + 1, TOTAL_MINUTES) / TOTAL_MINUTES if cur_idx >= 0 else 1.0
-    if cur_idx < 0:
-        day_frac = 1.0  # 盘前/盘后用全天量
-
-    results = []
-    for code_lower, bl in baseline.items():
-        q = quotes.get(code_lower)
-        if not q or bl["yesterday_vol"] <= 0:
-            continue
-        today_vol = q["vol"]
-        if today_vol <= 0:
-            continue
-        expected_vol = bl["yesterday_vol"] * day_frac
-        if expected_vol <= 0:
-            continue
-        vol_ratio = today_vol / expected_vol
-        results.append({
-            "code": code_lower,
-            "name": bl["name"],
-            "last_close": q.get("last_close", bl["last_close"]) or bl["last_close"],
-            "open": q["open"],
-            "price": q["price"],
-            "vol": today_vol,
-            "vol_ratio": round(vol_ratio, 2),
-        })
-
-    results.sort(key=lambda r: r["vol_ratio"], reverse=True)
+    results = scan_cycle(quotes, yesterday, cur_time, cur_idx, args.ratio)
     breakouts = [r for r in results if r["vol_ratio"] >= args.ratio]
     display = breakouts[:args.top] if breakouts else results[:args.top]
-
     render_top(display, cur_time, cur_idx, args,
-               len(breakouts), len(results), 1, time.time() - t0)
+               len(breakouts), len(results), 1,
+               time.time() - t0, yesterday)
     print(f"\n⏱️  总耗时: {time.time()-t0:.1f}s")
 
 
 # ═══════════════════════════════════════════════════════════
-# 实时监控循环
+# 监控循环
 # ═══════════════════════════════════════════════════════════
-def watch_loop(args, baseline: dict):
-    """实时监控循环，每 interval 秒刷新全市场 Top N"""
-    all_codes_lower = list(baseline.keys())
+def watch_loop(args, yesterday: dict, all_codes: list):
     cycle = 0
-
-    print(f"🔭 全市场放量监控启动  |  Top{args.top}  |  阈值≥{args.ratio}x  |  刷新间隔 {args.interval}s")
-    print(f"📋 股票基数: {len(baseline)} 只")
+    print(f"🔭 全市场放量监控 [分钟级精度]  |  Top{args.top}  |  阈值≥{args.ratio}x  |  "
+          f"刷新间隔 {args.interval}s")
+    print(f"📋 股票: {len(all_codes)} 只  |  昨日分时数据: {len(yesterday)} 只")
     print(f"⏰ 开始时间: {datetime.now().strftime('%H:%M:%S')}")
     print()
 
@@ -424,7 +475,6 @@ def watch_loop(args, baseline: dict):
             cur_time = datetime.now()
             cur_idx = current_minute_index(cur_time)
 
-            # 交易时间检查
             if cur_idx < 0:
                 h, m = cur_time.hour, cur_time.minute
                 is_lunch = (h == 11 and m >= 30) or (h == 12)
@@ -435,79 +485,75 @@ def watch_loop(args, baseline: dict):
                 time.sleep(10)
                 continue
 
-            # 获取实时行情
-            quotes = fetch_all_realtime(all_codes_lower)
+            quotes = fetch_all_realtime(all_codes)
             if not quotes:
                 time.sleep(5)
                 continue
 
-            # 计算量比
-            day_frac = (cur_idx + 1) / TOTAL_MINUTES
-            results = []
-            for code_lower, bl in baseline.items():
-                q = quotes.get(code_lower)
-                if not q or bl["yesterday_vol"] <= 0:
-                    continue
-                today_vol = q["vol"]
-                if today_vol <= 0:
-                    continue
-                expected_vol = bl["yesterday_vol"] * day_frac
-                if expected_vol <= 0:
-                    continue
-                vol_ratio = today_vol / expected_vol
-                results.append({
-                    "code": code_lower,
-                    "name": bl["name"],
-                    "last_close": q.get("last_close", bl["last_close"]) or bl["last_close"],
-                    "open": q["open"],
-                    "price": q["price"],
-                    "vol": today_vol,
-                    "vol_ratio": round(vol_ratio, 2),
-                })
-
-            results.sort(key=lambda r: r["vol_ratio"], reverse=True)
+            results = scan_cycle(quotes, yesterday, cur_time, cur_idx, args.ratio)
             breakouts = [r for r in results if r["vol_ratio"] >= args.ratio]
             display = breakouts[:args.top] if breakouts else results[:args.top]
 
             cycle_elapsed = time.time() - cycle_t0
             render_top(display, cur_time, cur_idx, args,
-                       len(breakouts), len(results), cycle, cycle_elapsed)
+                       len(breakouts), len(results), cycle,
+                       cycle_elapsed, yesterday)
 
-            # 精确等待
             elapsed = time.time() - cycle_t0
             if elapsed < args.interval:
                 time.sleep(args.interval - elapsed)
 
     except KeyboardInterrupt:
-        print(f"\n\n⏹️  监控已停止（Ctrl+C）。共 {cycle} 轮。\n", flush=True)
+        print(f"\n\n⏹️  监控已停止。共 {cycle} 轮。\n", flush=True)
 
 
 # ═══════════════════════════════════════════════════════════
 # 主入口
 # ═══════════════════════════════════════════════════════════
 def main():
-    parser = argparse.ArgumentParser(description="全市场放量实时监控")
+    parser = argparse.ArgumentParser(description="全市场放量实时监控（分钟级精度）")
     parser.add_argument("--top", "-n", type=int, default=10, help="显示前 N 只（默认10）")
-    parser.add_argument("--ratio", "-r", type=float, default=1.5, help="放量阈值（量比，默认1.5x）")
-    parser.add_argument("--interval", "-i", type=int, default=300, help="刷新间隔秒数（默认300=5分钟）")
+    parser.add_argument("--ratio", "-r", type=float, default=1.5, help="放量阈值（默认1.5x）")
+    parser.add_argument("--interval", "-i", type=int, default=300, help="刷新间隔（秒，默认300）")
     parser.add_argument("--once", action="store_true", help="单次扫描（不复刷新）")
+    parser.add_argument("--preload-workers", type=int, default=_DEFAULT_PRELOAD_WORKERS,
+                        help=f"预加载线程数（默认{_DEFAULT_PRELOAD_WORKERS}）")
     args = parser.parse_args()
 
-    # ── 预加载全市场代码 & 昨日基线 ────────────────────────
+    # ── 确定上一交易日 ───────────────────────────────────
+    last_trading = find_last_trading_day(datetime.now().date())
+    print(f"📅 上一交易日: {last_trading}  |  今日: {datetime.now().strftime('%Y-%m-%d')}")
+
+    # ── 加载代码 ─────────────────────────────────────────
     t0 = time.time()
     all_codes = gt.get_all_stock_codes()
     names_cache = gt.load_stock_names()
     print(f"📋 全市场股票: {len(all_codes)} 只")
-    baseline = preload_baseline(all_codes, names_cache)
-    if not baseline:
-        print("❌ 基线数据为空，请先运行 cache_qfq_daily.py --refresh")
+
+    # ── 预加载昨日分时 ───────────────────────────────────
+    yesterday = preload_yesterday_bars(all_codes, names_cache, last_trading,
+                                       max_workers=args.preload_workers)
+
+    if not yesterday:
+        print("❌ 昨日分时数据为空，退出")
         return
+
+    # ── 提取无前缀代码列表（与 mootdx 对齐）──────────────
+    raw_codes = []
+    for code in all_codes:
+        raw = code.lower()
+        for pfx in ("sh", "sz", "bj"):
+            if raw.startswith(pfx):
+                raw = raw[2:]
+                break
+        raw_codes.append(raw)
+
     print(f"⏱️  启动耗时: {time.time()-t0:.1f}s\n")
 
     if args.once:
-        scan_once(args, baseline)
+        scan_once(args, yesterday, raw_codes)
     else:
-        watch_loop(args, baseline)
+        watch_loop(args, yesterday, raw_codes)
 
 
 if __name__ == "__main__":
