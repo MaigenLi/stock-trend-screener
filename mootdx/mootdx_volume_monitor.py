@@ -386,12 +386,12 @@ def hdr_line() -> str:
         f"{CLEAR_LINE}"
         f"{pad_to_width('代码', W_CODE)}{' ' * GAP_CODE_NAME}"
         f"{pad_to_width('名称', W_NAME)}{' ' * GAP_NAME_LAST}"
-        f"{pad_to_width('昨收盘', W_LAST, '>')}{' ' * GAP_LAST_OPEN}"
-        f"{pad_to_width('今开盘', W_OPEN, '>')}{' ' * GAP_OPEN_PRICE}"
-        f"{pad_to_width('成交价', W_PRICE, '>')}{' ' * GAP_PRICE_VOL}"
-        f"{pad_to_width('成交量', W_VOL, '>')}{' ' * GAP_VOL_RATIO}"
+        f"{pad_to_width('昨日', W_LAST, '>')}{' ' * GAP_LAST_OPEN}"
+        f"{pad_to_width('今日', W_OPEN, '>')}{' ' * GAP_OPEN_PRICE}"
+        f"{pad_to_width('交价', W_PRICE, '>')}{' ' * GAP_PRICE_VOL}"
+        f"{pad_to_width('交量', W_VOL, '>')}{' ' * GAP_VOL_RATIO}"
         f"{pad_to_width('量比', W_RATIO, '>')}{' ' * GAP_RATIO_FLAG}"
-        f"{pad_to_width('放量标识', W_FLAG)}"
+        f"{pad_to_width('标识', W_FLAG)}"
         "\n"
     )
 
@@ -438,8 +438,8 @@ def summary_line(total: int, breakouts: int, err_cnt: int) -> str:
     s = (
         f"{CLEAR_LINE}"
         f"合计：{total} 只  |  "
-        f"放量：{breakouts}  |  "
-        f"未放量：{ok - breakouts}"
+        f"量OK：{breakouts}  |  "
+        f"量NO：{ok - breakouts}"
         f"{'  |  错误：' + str(err_cnt) if err_cnt else ''}"
     )
     pad = SEP_TOTAL - len(strip_ansi(s))
@@ -612,19 +612,19 @@ def main():
                     threshold  = yes_cumsum * args.vol_ratio
                     ratio_val  = (cur_cum / yes_cumsum) if yes_cumsum > 0 else 0.0
                     is_breakout = cur_cum > threshold
-                    verdict = "放量" if is_breakout else "未放量"
+                    verdict = " OK" if is_breakout else "NO"
                 elif is_lunch_break:
                     yes_cumsum = 0
                     threshold  = 0
                     ratio_val  = 0.0
                     is_breakout = False
-                    verdict = "休市"
+                    verdict = "休"
                 else:
                     yes_cumsum = 0
                     threshold  = 0
                     ratio_val  = 0.0
                     is_breakout = False
-                    verdict = ("盘前/盘后" if cur_idx < 0 else "无昨日"
+                    verdict = ("前/后" if cur_idx < 0 else "无昨日"
                                if not yes_bars else "---")
 
                 records.append({

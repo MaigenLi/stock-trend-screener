@@ -53,6 +53,7 @@ EMAIL_TO = _env.get("QQ_EMAIL", "920662304@qq.com")
 # ── 路径配置 ───────────────────────────────────────────
 WORKSPACE = Path(__file__).parent.parent.resolve()
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
+REPORTS_DIR = OUTPUT_DIR  # 报告输出目录
 FONT_PATH = Path(__file__).parent.parent / "fonts" / "simhei.ttf"  # 本地字体（从Win挂载复制）
 TRACKER_CSV = OUTPUT_DIR.parent / "feedback_tracker.csv"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)

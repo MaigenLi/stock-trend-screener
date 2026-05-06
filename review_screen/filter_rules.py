@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass
 
-from utils import w_get, find_ascending_start
+from .utils import w_get, find_ascending_start
 
 
 @dataclass

@@ -6,7 +6,7 @@
 
 import numpy as np
 
-from utils import w_get, find_ascending_start
+from .utils import w_get, find_ascending_start
 
 # 阶段标签常量
 PHASE_MARKUP = "主升浪"

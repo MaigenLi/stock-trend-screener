@@ -27,7 +27,7 @@ sys.path.insert(0, str(WORKSPACE))
 from stock_trend import gain_turnover as gt
 from stock_trend import trend_strong_screen as tss
 from stock_trend import rps_strong_screen as rps
-from gain_turnover import _rpad, _lpad, normalize_prefixed
+
 DEFAULT_RPS_COMPOSITE = 75.0   # Step1: RPS综合分门槛
 DEFAULT_RSI_LOW = 50.0         # Step1: RSI下限（须在均线上方，下跌趋势排除）
 DEFAULT_RSI_HIGH = 88.0        # Step1: RSI上限（>88超买过滤；82~88在Step2扣分）
@@ -88,7 +88,7 @@ def step1_rps(
 
     # 若指定了 codes，则只保留指定范围（规范化前缀）
     if codes is not None:
-        codes_normalized = [normalize_prefixed(c) for c in codes]
+        codes_normalized = [gt.normalize_prefixed(c) for c in codes]
         codes_lower = {c.lower() for c in codes_normalized}
         df_all = df_all[df_all["code"].str.lower().isin(codes_lower)]
         print(f"   限定范围: {len(codes)} 只（其余用于排名计算）")
@@ -281,8 +281,7 @@ def step3_gain(
         passed_codes = {r.code.lower() for r in results}
         rejected_codes = [c for c in codes if c.lower() not in passed_codes]
         end_date = target_date.strftime("%Y-%m-%d") if target_date else None
-        from stock_trend.gain_turnover import prepare_data
-        from gain_turnover_screen import load_qfq_history
+        from stock_trend.gain_turnover_screen import load_qfq_history
         for code in rejected_codes:
             c = gt.normalize_prefixed(code)
             df = load_qfq_history(c, end_date=end_date, adjust=config.adjust, refresh=False)
@@ -294,7 +293,7 @@ def step3_gain(
             if df.empty:
                 rejected.append({"code": code, "name": "", "reasons": ["无目标日期数据"]})
                 continue
-            prep = prepare_data(df)
+            prep = gt.prepare_data(df)
             if prep is None:
                 rejected.append({"code": code, "name": "", "reasons": ["数据不足"], "idx": -1})
                 continue

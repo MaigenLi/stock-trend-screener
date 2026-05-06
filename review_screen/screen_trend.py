@@ -23,11 +23,11 @@ WORKSPACE = Path(__file__).parent.parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 
-from stock_trend.review_screen.data_cache import load_qfq_history, preload_all_codes
-from stock_trend.review_screen.indicators import compute_all, detect_volume_price_wave
-from stock_trend.review_screen.filter_rules import FilterConfig, check_filters
-from stock_trend.review_screen.scorer import score_stock, score_wave_quality, score_detail, classify_phase
-from stock_trend.review_screen.utils import find_ascending_start
+from .data_cache import load_qfq_history, preload_all_codes
+from .indicators import compute_all, detect_volume_price_wave
+from .filter_rules import FilterConfig, check_filters
+from .scorer import score_stock, score_wave_quality, score_detail, classify_phase
+from .utils import find_ascending_start
 
 DEFAULT_WORKERS = 8
 
@@ -382,7 +382,7 @@ if __name__ == "__main__":
     # ─────────────────────────────────────────
     def _load_df_for_waves(code: str, target_date: datetime):
         """重新加载数据用于波段分析"""
-        from stock_trend.review_screen.data_cache import load_qfq_history
+        from .data_cache import load_qfq_history
 
         c = normalize_code(code)
         end_str = target_date.strftime("%Y-%m-%d") if target_date else None
@@ -615,8 +615,8 @@ if __name__ == "__main__":
         
         # --waves --code 模式：即使不通过也显示
         if args.codes and not wave_items:
-            from stock_trend.review_screen.data_cache import load_qfq_history
-            from stock_trend.review_screen.indicators import detect_volume_price_wave
+            from .data_cache import load_qfq_history
+            from .indicators import detect_volume_price_wave
             for code_str in args.codes:
                 c = normalize_code(code_str)
                 df, _ = _load_df_for_waves(code_str, target_date)
