@@ -47,6 +47,7 @@ from stock_trend.gain_turnover import (
     load_qfq_history,
     load_stock_names,
     normalize_prefixed,
+    prepare_data,
 )
 
 DEFAULT_TOP_N = 100
@@ -62,10 +63,7 @@ def screen_market(
     max_workers: int = DEFAULT_WORKERS,
     refresh_cache: bool = False,
 ) -> list:
-    from gain_turnover import (
-        get_top_sectors, get_stock_sector_map, resolve_stock_sector
-    )
-
+    # get_top_sectors, get_stock_sector_map, resolve_stock_sector already imported at module level
     names = load_stock_names()
     total = len(codes)
     results = []
@@ -92,7 +90,6 @@ def screen_market(
     )
 
     # ── 数据预加载 ────────────────────────────────────────────────
-    from gain_turnover import prepare_data
     prepared_data: dict = {}
     print(f"   📊 数据预加载（{total}只）...")
     t0_preload = time.time()

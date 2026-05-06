@@ -40,6 +40,7 @@ from stock_trend.gain_turnover import (
     get_stock_name,
     load_stock_names,
     normalize_prefixed,
+    get_all_stock_codes,
 )
 
 # ── 指数代码（AkShare格式）───────────────────────────────
@@ -71,34 +72,6 @@ def _get_index_history(code: str, days: int = 30) -> Optional[pd.DataFrame]:
         return _INDEX_CACHE[key][0].tail(days).reset_index(drop=True)
     return None
 
-
-# ── 股票代码列表 ────────────────────────────────────────
-STOCK_CODES_FILE = Path.home() / "stock_code" / "results" / "stock_codes.txt"
-
-
-def get_all_stock_codes() -> List[str]:
-    """从 stock_code/results/stock_codes.txt 读取股票列表"""
-    if not STOCK_CODES_FILE.exists():
-        raise FileNotFoundError(f"股票代码文件不存在: {STOCK_CODES_FILE}")
-    codes = []
-    with open(STOCK_CODES_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            code = line.lower()
-            if code.startswith(("sh", "sz", "bj")):
-                codes.append(code)
-            elif code.isdigit() and len(code) == 6:
-                if code.startswith(("60", "68", "90")):
-                    codes.append(f"sh{code}")
-                elif code.startswith(("00", "30", "20")):
-                    codes.append(f"sz{code}")
-                elif code.startswith(("43", "83", "87", "92")):
-                    codes.append(f"bj{code}")
-                else:
-                    codes.append(f"sh{code}")
-    return codes
 
 
 def compute_ma(series: pd.Series, n: int) -> pd.Series:

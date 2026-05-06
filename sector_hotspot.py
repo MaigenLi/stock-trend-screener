@@ -21,28 +21,35 @@ import numpy as np
 import pandas as pd
 import akshare as ak
 
-CACHE_DIR = Path.home() / ".openclaw/workspace/.cache/sector_hotspot"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+WORKSPACE = Path(__file__).parent.parent.resolve()
+
+CACHE_DIR = WORKSPACE / ".cache/sector_hotspot"
+HOT_FILE    = CACHE_DIR / "hot_rank.json"
+# 板块映射走 gain_turnover 的统一路径（stock_sector_map.json）
+from stock_trend.gain_turnover import SECTOR_MAP_FILE as _SECTOR_MAP_FILE
+SECTOR_MAP_FILE = _SECTOR_MAP_FILE
+SECTOR_FILE     = CACHE_DIR / "sector_spot.json"  # 仅 sector_spot.json 用本地路径
+
+# 空缓存默认骨架（确保列结构正确，避免 KeyError）
+_EMPTY_SECTOR_DF = pd.DataFrame(columns=[
+    "label","name","count","change_pct","change_amt","total_volume","total_amount"])
+_EMPTY_HOT_DF = pd.DataFrame(columns=["rank","code","name","price","change_amt","change_pct"])
+
 
 # ─────────────────────────────────────────
 # 全局缓存（进程内共享，有锁保护）
 # ─────────────────────────────────────────
 _lock = threading.RLock()
 _sector_spot_cache: Optional[pd.DataFrame] = None
-_sector_spot_ts: float = 0.0          # 上次拉取时间戳
+_sector_spot_ts: float = 0.0
 _hot_rank_cache: Optional[pd.DataFrame] = None
-_stock_sector_map: Optional[dict[str, str]] = None   # code → label
+_stock_sector_map: Optional[dict[str, str]] = None
 _stock_sector_map_ts: float = 0.0
 _hot_rank_ts: float = 0.0
 
-SECTOR_CACHE_TTL  = 300   # 5 分钟
-HOT_CACHE_TTL     = 600   # 10 分钟
-SECTOR_MAP_TTL   = 3600   # 个股→板块映射缓存 1 小时
-
-# 空缓存默认骨架（确保列结构正确，避免 KeyError）
-_EMPTY_SECTOR_DF = pd.DataFrame(columns=[
-    "label","name","count","change_pct","change_amt","total_volume","total_amount"])
-_EMPTY_HOT_DF = pd.DataFrame(columns=["rank","code","name","price","change_amt","change_pct"])
+SECTOR_CACHE_TTL  = 300
+HOT_CACHE_TTL     = 600
+SECTOR_MAP_TTL   = 3600
 
 
 # ═══════════════════════════════════════════════════════════
@@ -310,8 +317,6 @@ def get_sector_change_pct(sector_label: str) -> float:
 # ═══════════════════════════════════════════════════════════════════════
 
 SECTOR_FILE  = CACHE_DIR / "sector_spot.json"
-HOT_FILE    = CACHE_DIR / "hot_rank.json"
-SECTOR_MAP_FILE = CACHE_DIR / "sector_map.json"
 
 
 def _json_serializer(obj):

@@ -34,6 +34,7 @@ from stock_trend.gain_turnover import (
     get_stock_name,
     load_stock_names,
     normalize_prefixed,
+    get_all_stock_codes,
 )
 
 DEFAULT_WORKERS = 8
@@ -53,14 +54,6 @@ def _f(ls: list, widths: list[int]) -> str:
     parts = [_pad(str(ls[i]), widths[i]) for i in range(len(ls))]
     return "  ".join(parts)
 
-
-def get_all_stock_codes() -> List[str]:
-    """从 stock_codes.txt 读取全市场股票代码"""
-    code_file = Path.home() / "stock_code/results/stock_codes.txt"
-    if code_file.exists():
-        with open(code_file, "r") as f:
-            return [normalize_prefixed(line.strip()) for line in f if line.strip()]
-    return []
 
 
 def calc_stock_rps(
