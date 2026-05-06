@@ -40,15 +40,12 @@ sleep 60
 
 # 步骤5：刷新板块热点缓存
 echo "[$(date '+%H:%M:%S')] 步骤5/8: refresh_sector_cache.py"
-#${PYTHON} ${WORKSPACE}/refresh_sector_cache.py >> ${LOG_DIR}/refresh_sector_cache.log 2>&1
+${PYTHON} ${WORKSPACE}/refresh_sector_cache.py >> ${LOG_DIR}/refresh_sector_cache.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤5完成，休息60秒..."
 sleep 60
 
 # 步骤6：选股筛选
-echo "[$(date '+%H:%M:%S')] 步骤6/8: triple_screen.py --date ${DATE}"
-#${PYTHON} ${WORKSPACE}/triple_screen.py --date ${DATE} >> ${LOG_DIR}/daily_screen.log 2>&1
-sleep 60
-
+echo "[$(date '+%H:%M:%S')] 步骤6/8: screen_double.py --date ${DATE}"
 ${PYTHON} ${WORKSPACE}/review_screen/screen_double.py --date ${DATE} --top-n 250 --mode winner --gain20 20 --turnover 6 >> ${LOG_DIR}/screen_double.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤6完成，休息60秒..."
 sleep 60
@@ -58,10 +55,6 @@ echo "[$(date '+%H:%M:%S')] 步骤7/8: closing_report.py"
 #${PYTHON} ${WORKSPACE}/closing_report.py >> ${LOG_DIR}/closing_report.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤7完成，休息60秒..."
 sleep 60
-
-# 步骤8：趋势强势股扫描
-echo "[$(date '+%H:%M:%S')] 步骤8/8: trend_strong_screen.py --top-n 100"
-#${PYTHON} ${WORKSPACE}/trend_strong_screen.py --top-n 100 >> ${LOG_DIR}/trend_strong.log 2>&1
 
 echo "========== 每日收盘流水线完成 [$(date '+%H:%M:%S')] =========="
 

@@ -6,8 +6,7 @@ mootdx 实时行情监控脚本
 
 界面：终端原地刷新，不翻屏
 用法：
-    python3 mootdx_volume_monitor.py \
-        --date 2026-04-30    # 默认为今天，自动找最近交易日作基准
+    python3 mootdx_volume_monitor.py  # 默认为今天，自动找最近交易日作基准
 """
 
 import json, argparse, sys, time, re, os, logging
