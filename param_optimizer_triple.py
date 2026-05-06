@@ -15,9 +15,9 @@ import numpy as np
 WORKSPACE = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(WORKSPACE))
 
-import rps_strong_screen as rps
-import trend_strong_screen as tss
-import gain_turnover as gt
+from stock_trend import rps_strong_screen as rps
+from stock_trend import trend_strong_screen as tss
+from stock_trend import gain_turnover as gt
 from stock_trend import gain_turnover_screen
 
 
