@@ -10,7 +10,7 @@ mootdx 实时行情监控脚本
         --date 2026-04-30    # 默认为今天，自动找最近交易日作基准
 """
 
-import json, argparse, sys, time, re, os
+import json, argparse, sys, time, re, os, logging
 from pathlib import Path
 from datetime import datetime, date as date_type
 
@@ -520,6 +520,14 @@ def main():
         sys.exit(1)
 
     client = get_client()
+
+    # 抑制 tdxpy 内部的 ERROR 日志（get_security_type 对部分股票会 raise NotImplementedError，
+    # 被 helper.get_security_coefficient 捕获并仅记 logger.error，不影响功能）
+    import tdxpy.logger as _tdx_logger
+    _tdx_logger.logger.setLevel(logging.CRITICAL)
+    for _h in _tdx_logger.logger.handlers:
+        _h.setLevel(logging.CRITICAL)
+
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 已连接 mootdx 服务器",
           flush=True)
     if not is_tty():
