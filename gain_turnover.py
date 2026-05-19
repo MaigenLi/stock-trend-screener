@@ -42,8 +42,12 @@ import pandas as pd
 
 WORKSPACE = Path(__file__).parent.parent.resolve()
 CACHE_DIR = WORKSPACE / ".cache" / "qfq_daily"
+RAW_CACHE_DIR = WORKSPACE / ".cache" / "raw_daily"
 STOCK_CODES_FILE = Path.home() / "stock_code" / "results" / "stock_codes.txt"
 STOCK_NAMES_FILE = Path.home() / "stock_code" / "results" / "all_stock_names_final.json"
+# AkShare 股票列表缓存（沪深A股：主板+科创板+创业板，排除北交所/新三板）
+AKSHARE_STOCK_NAMES_FILE = WORKSPACE / "stock_reports" / "all_a_stock_names.csv"
+AKSHARE_STOCK_CODES_FILE  = WORKSPACE / "stock_reports" / "all_a_stock_codes.txt"
 FUNDAMENTAL_CACHE_DIR = WORKSPACE / ".cache" / "fundamental"
 FUNDAMENTAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -237,36 +241,111 @@ def normalize_prefixed(code: str) -> str:
     return code
 
 def get_all_stock_codes() -> List[str]:
-    if not STOCK_CODES_FILE.exists():
-        raise FileNotFoundError(f"股票代码文件不存在: {STOCK_CODES_FILE}")
+    """从本地文件加载全市场股票代码列表（兼容旧接口）。"""
+    if STOCK_CODES_FILE.exists():
+        codes: List[str] = []
+        with open(STOCK_CODES_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                codes.append(normalize_prefixed(line))
+        return list(dict.fromkeys(codes))
+    # 回退：使用 AkShare 列表
+    return get_all_stock_codes_akshare()
+
+def get_all_stock_codes_akshare(force: bool = False) -> List[str]:
+    """通过 AkShare 获取沪深A股全市场代码列表（主板+科创板+创业板，不含北交所）。
+    force=True 时强制重新从网络获取最新列表。"""
+    _ensure_akshare_stock_list(force=force)
     codes: List[str] = []
-    with open(STOCK_CODES_FILE, "r", encoding="utf-8") as f:
+    with open(AKSHARE_STOCK_CODES_FILE, "r", encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            codes.append(normalize_prefixed(line))
-    return list(dict.fromkeys(codes))
+            c = line.strip()
+            if c:
+                codes.append(c)
+    return codes
 
 def load_stock_names() -> Dict[str, str]:
+    """从本地文件加载股票名称映射（兼容旧接口）。"""
     names: Dict[str, str] = {}
-    if not STOCK_NAMES_FILE.exists():
-        return names
+    if STOCK_NAMES_FILE.exists():
+        try:
+            with open(STOCK_NAMES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            stocks = data.get("stocks", {}) if isinstance(data, dict) else {}
+            for code, info in stocks.items():
+                if not isinstance(info, dict):
+                    continue
+                name = info.get("name", "未知")
+                names[code.lower()] = name
+                pure = info.get("code", "")
+                if pure:
+                    names[pure.lower()] = name
+        except Exception:
+            pass
+    if not names:
+        return load_stock_names_akshare()
+    return names
+
+def load_stock_names_akshare(force: bool = False) -> Dict[str, str]:
+    """通过 AkShare 获取沪深A股名称映射，返回 {纯码小写: 名称}（兼容旧接口格式）。
+    force=True 时强制重新从网络获取最新列表。"""
+    _ensure_akshare_stock_list(force=force)
+    names: Dict[str, str] = {}
     try:
-        with open(STOCK_NAMES_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        stocks = data.get("stocks", {}) if isinstance(data, dict) else {}
-        for code, info in stocks.items():
-            if not isinstance(info, dict):
-                continue
-            name = info.get("name", "未知")
-            names[code.lower()] = name
-            pure = info.get("code", "")
-            if pure:
-                names[pure.lower()] = name
+        df = pd.read_csv(AKSHARE_STOCK_NAMES_FILE, dtype={"code": str}, encoding="utf-8-sig")
+        for _, row in df.iterrows():
+            code = str(row["code"]).zfill(6)
+            name = str(row["name"]) if pd.notna(row["name"]) else "未知"
+            names[code] = name
+            names[f"sh{code}"] = name
+            names[f"sz{code}"] = name
     except Exception:
         pass
     return names
+
+def _ensure_akshare_stock_list(force: bool = False) -> None:
+    """检查并生成 AkShare 股票列表缓存文件（含科创板）。
+    force=True 时强制删除缓存重新获取。"""
+    if force:
+        if AKSHARE_STOCK_CODES_FILE.exists():
+            AKSHARE_STOCK_CODES_FILE.unlink(missing_ok=True)
+        if AKSHARE_STOCK_NAMES_FILE.exists():
+            AKSHARE_STOCK_NAMES_FILE.unlink(missing_ok=True)
+    elif AKSHARE_STOCK_CODES_FILE.exists() and AKSHARE_STOCK_NAMES_FILE.exists():
+        return
+    import pandas as pd
+    # 上交所（主板60开头 + 科创板688开头）
+    df_sh = ak.stock_info_sh_name_code()
+    df_sh["code"] = df_sh["证券代码"].astype(str).str.zfill(6)
+    # 退市：以4开头（上交所）或名称含"退"的都排除
+    df_sh = df_sh[~df_sh["code"].str.startswith("4")]
+    df_sh = df_sh[~df_sh["证券简称"].str.contains("退", na=False)]
+
+    # 深交所（主板 + 创业板）
+    df_sz = ak.stock_info_sz_name_code()
+    df_sz_main = df_sz[df_sz["板块"] == "主板"][["A股代码", "A股简称"]].rename(
+        columns={"A股代码": "code", "A股简称": "name"})
+    df_sz_cyb = df_sz[df_sz["板块"] == "创业板"][["A股代码", "A股简称"]].rename(
+        columns={"A股代码": "code", "A股简称": "name"})
+
+    # 科创板（单独接口）
+    df_kc = ak.stock_zh_kcb_spot()[["代码", "名称"]].rename(
+        columns={"代码": "code", "名称": "name"})
+    df_kc["code"] = df_kc["code"].str.replace("sh", "", regex=False).str.zfill(6)
+
+    # 合并
+    df_sh_out = df_sh[["code", "证券简称"]].rename(columns={"证券简称": "name"})
+    df_all = pd.concat([df_sh_out, df_sz_main, df_sz_cyb, df_kc], ignore_index=True).drop_duplicates("code")
+    df_all["code"] = df_all["code"].astype(str).str.zfill(6)
+    df_all = df_all.sort_values("code").reset_index(drop=True)
+    AKSHARE_STOCK_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    df_all.to_csv(AKSHARE_STOCK_NAMES_FILE, index=False, encoding="utf-8-sig")
+    codes_out = df_all["code"].tolist()
+    with open(AKSHARE_STOCK_CODES_FILE, "w", encoding="utf-8") as f:
+        for c in codes_out:
+            f.write(c + "\n")
 
 def get_stock_name(code: str, names_cache: Dict[str, str]) -> str:
     c = normalize_prefixed(code).lower()
@@ -275,10 +354,127 @@ def get_stock_name(code: str, names_cache: Dict[str, str]) -> str:
     pure = c[-6:]
     return names_cache.get(pure, "未知")
 
+def _raw_cache_path(code: str) -> Path:
+    """原始日线缓存路径"""
+    RAW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    pure = normalize_symbol(code)
+    return RAW_CACHE_DIR / f"{pure}.csv"
+
+
 def _cache_path(code: str, adjust: str = "qfq") -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     pure = normalize_symbol(code)
     return CACHE_DIR / f"{pure}_{adjust}.csv"
+
+
+def load_raw_history(
+    code: str,
+    start_date: Optional[str | pd.Timestamp] = None,
+    end_date: Optional[str | pd.Timestamp] = None,
+    refresh: bool = False,
+) -> pd.DataFrame:
+    """加载原始（不复权）日线。接口与 load_qfq_history 完全一致。
+
+    优先本地缓存，缺失或 refresh=True 时从 AkShare 拉取。
+    回测用法：显式传入 end_date（截止日），函数内部完成防未来数据泄漏截断。
+
+    注意：内部始终加载全量历史（以满足 MA60 等长周期指标），
+    start_date 仅在前端结果中截取用，不影响缓存逻辑。
+    """
+    path = _raw_cache_path(code)
+    lock = get_lock(path.name)
+
+    with lock:
+        use_cache = path.exists() and not refresh
+        if use_cache and end_date is not None:
+            if path.exists():
+                try:
+                    cached = pd.read_csv(path, parse_dates=["date"])
+                    # 缓存行数 < 500 说明是历史不完整的旧缓存（如早期 start_date 限制导致），丢弃重拉
+                    if not cached.empty and cached["date"].max() >= pd.Timestamp(end_date) and len(cached) >= 500:
+                        use_cache = True
+                    else:
+                        use_cache = False   # 缓存不含目标日期或历史不完整，联网拉全量
+                except Exception:
+                    use_cache = False
+
+        if use_cache:
+            try:
+                df = pd.read_csv(path, parse_dates=["date"])
+            except Exception:
+                df = pd.DataFrame()
+        else:
+            df = _fetch_raw_daily(code)   # 始终拉全量（1990→2099），缓存全量历史
+            if not df.empty:
+                df.to_csv(path, index=False, encoding="utf-8")
+            elif path.exists():
+                try:
+                    df = pd.read_csv(path, parse_dates=["date"])
+                except Exception:
+                    df = pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"])
+
+    if end_date is not None:
+        end_ts = pd.Timestamp(end_date)
+    else:
+        end_ts = pd.Timestamp(df["date"].max())
+
+    # ★ 防未来数据泄漏截断
+    df = df[df["date"] <= end_ts]
+
+    if not df.empty and df["date"].max() > end_ts:
+        raise RuntimeError(
+            f"未来数据泄漏检测：max_date={df['date'].max()} > end_date={end_ts}，"
+            f"缓存 {path.name} 包含 end_date 之后的数据，请删除缓存后重试"
+        )
+
+    if start_date is not None:
+        start_ts = pd.Timestamp(start_date)
+        if start_ts > end_ts:
+            raise ValueError(f"start_date ({start_ts}) > end_date ({end_ts})")
+        df = df[df["date"] >= start_ts]
+
+    return df.sort_values("date").reset_index(drop=True)
+
+
+def _fetch_raw_daily(code: str) -> pd.DataFrame:
+    """通过 AkShare 获取原始日线（不复权）。"""
+    try:
+        c = normalize_symbol(code)
+        if c.startswith(("6", "5", "9")):
+            sym = f"sh{c}"
+        else:
+            sym = f"sz{c}"
+        df = ak.stock_zh_a_daily(symbol=sym, start_date="1990-01-01",
+                                 end_date="2099-12-31", adjust="")
+        if df is None or df.empty:
+            return pd.DataFrame()
+        rename = {
+            "日期": "date", "开盘": "open", "最高": "high",
+            "最低": "low",  "收盘": "close", "成交量": "volume",
+            "成交额": "amount", "换手率": "turnover",
+            "流通股本": "outstanding_share",
+        }
+        df.rename(columns=rename, inplace=True)
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+        cols_ordered = ["date", "open", "high", "low", "close",
+                        "volume", "amount", "turnover", "outstanding_share"]
+        if "turnover" in df.columns:
+            # AkShare 原始换手率为小数（如 0.05727 表示 5.727%），转为百分比数值
+            df["turnover"] = df["turnover"] * 100.0
+            df["true_turnover"] = df["turnover"]
+            cols_ordered.append("true_turnover")
+        keep = [c for c in cols_ordered if c in df.columns]
+        return df[keep]
+    except Exception:
+        return pd.DataFrame()
+
+
 
 
 def _fetch_tencent_realtime_today(code: str) -> Optional[pd.DataFrame]:
@@ -700,6 +896,131 @@ def compute_rsi_scalar(close: np.ndarray, period: int = 14) -> float:
     arr = compute_rsi(close, period)
     valid = arr[~np.isnan(arr)]
     return float(valid[-1]) if len(valid) > 0 else 50.0
+
+
+# ── 波段压缩检测 ──────────────────────────────────────────────
+
+def _true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
+    """TR = max(H-L, |H-PC|, |L-PC|)，返回与输入等长的数组（首个为 nan）。"""
+    n = len(high)
+    tr = np.full(n, np.nan)
+    if n < 2:
+        return tr
+    pc = close[:-1]
+    tr[1:] = np.maximum(high[1:] - low[1:],
+                        np.maximum(np.abs(high[1:] - pc),
+                                   np.abs(low[1:] - pc)))
+    return tr
+
+
+def compute_vol_compression(high: np.ndarray, low: np.ndarray,
+                             close: np.ndarray, volume: np.ndarray,
+                             atr_window: int = 14,
+                             boll_window: int = 20,
+                             vol_window: int = 20) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    波段压缩检测（数组版，返回完整时间序列）。
+
+    返回 (atr, atr_diff, bb_width, bb_squeeze, amplitude, amplitude_ma, volume_ma, volume_ratio, vol_squeeze)：
+      atr           : ATR（ Wilder 平滑 TR ）
+      atr_diff      : ATR 的 1 日差分（负值表示收缩）
+      bb_width      : 布林带宽度（ %，窄口意味收敛）
+      bb_squeeze    : 布林收口（宽度 < 阈值，bool）
+      amplitude     : 当日振幅（ % ）
+      amplitude_ma  : 振幅的 boll_window 日均线（ amplitude < amplitude_ma → 收缩）
+      volume_ma     : 成交量均线
+      volume_ratio  : 量比（当日量 / vol_window 日均量）
+      vol_squeeze   : 缩量（当日量 < vol_ma_threshold × vol_ma，bool）
+
+    阈值（可按需调整）：
+      bb_width_threshold : 3.0 %（收口阈值）
+      vol_ma_threshold   : 0.8（缩量阈值）
+    """
+    n = len(close)
+    bb_width_threshold = 3.0
+    vol_ma_threshold = 0.8
+
+    # 1) ATR
+    tr = _true_range(high, low, close)
+    atr = rolling_mean(tr, atr_window)
+
+    # ATR 1日差分（负 = 收缩）
+    atr_diff = np.full(n, np.nan)
+    if n > 1:
+        atr_diff[1:] = np.diff(atr)
+
+    # 2) 布林带宽度
+    ma = rolling_mean(close, boll_window)
+    std = np.full(n, np.nan)
+    if n >= boll_window:
+        std[boll_window-1:] = np.array([
+            float(np.std(close[i-boll_window+1:i+1], ddof=0))
+            for i in range(boll_window-1, n)
+        ])
+    bb_upper = ma + 2 * std
+    bb_lower = ma - 2 * std
+    bb_width = np.where(ma > 0, (bb_upper - bb_lower) / ma * 100, np.nan)
+    bb_squeeze = bb_width < bb_width_threshold
+
+    # 3) 振幅及振幅均线
+    amplitude = np.where(close > 0, (high - low) / close * 100, np.nan)
+    amplitude_ma = rolling_mean(amplitude, boll_window)  # 振幅均线，用 boll_window
+
+    # 4) 缩量
+    vol_ma = rolling_mean(volume, vol_window)
+    volume_ratio = np.where(vol_ma > 0, volume / vol_ma, np.nan)
+    vol_squeeze = volume < vol_ma * vol_ma_threshold  # 与参考代码逻辑一致
+
+    return atr, atr_diff, bb_width, bb_squeeze, amplitude, amplitude_ma, vol_ma, volume_ratio, vol_squeeze
+
+
+def vol_compression_scalar(high: np.ndarray, low: np.ndarray,
+                            close: np.ndarray, volume: np.ndarray) -> dict:
+    """
+    返回最新一日的波段压缩状态（标量字典），供评分/过滤使用。
+
+    四项压缩条件（与参考代码一致）：
+      atr_shrink    : ATR 差分 < 0（ATR 收缩）
+      bb_squeeze    : 布林带宽 < 3%（收口）
+      amp_shrink    : 当日振幅 < boll_window 日振幅均线（振幅收缩）
+      vol_squeeze   : 当日量 < 0.8 × vol_ma（缩量）
+      squeeze_count : 同时满足的条件数量（0~4）
+    """
+    (atr, atr_diff, bb_width, bb_squeeze,
+     amplitude, amplitude_ma,
+     vol_ma, volume_ratio, vol_squeeze) = \
+        compute_vol_compression(high, low, close, volume)
+
+    def last(arr):
+        v = arr[~np.isnan(arr)]
+        return float(v[-1]) if len(v) else np.nan
+
+    def last_bool(arr):
+        v = arr[~np.isnan(arr)]
+        return bool(v[-1]) if len(v) else False
+
+    squeeze_count = 0
+    if last_bool(atr_diff < 0):              squeeze_count += 1
+    if last_bool(bb_width < 3.0):            squeeze_count += 1
+    if not (np.isnan(last(amplitude)) or np.isnan(last(amplitude_ma))) \
+       and last(amplitude) < last(amplitude_ma): squeeze_count += 1
+    if last_bool(vol_squeeze):              squeeze_count += 1
+
+    return {
+        "atr":           round(last(atr), 4) if not np.isnan(last(atr)) else None,
+        "atr_diff":      round(last(atr_diff), 4) if not np.isnan(last(atr_diff)) else None,
+        "bb_width":      round(last(bb_width), 3) if not np.isnan(last(bb_width)) else None,
+        "amplitude":     round(last(amplitude), 3) if not np.isnan(last(amplitude)) else None,
+        "amplitude_ma": round(last(amplitude_ma), 3) if not np.isnan(last(amplitude_ma)) else None,
+        "volume_ma":    round(last(vol_ma), 0) if not np.isnan(last(vol_ma)) else None,
+        "volume_ratio": round(last(volume_ratio), 3) if not np.isnan(last(volume_ratio)) else None,
+        "atr_shrink":   last_bool(atr_diff < 0),
+        "bb_squeeze":   last_bool(bb_width < 3.0),
+        "amp_shrink":   False if (np.isnan(last(amplitude)) or np.isnan(last(amplitude_ma))) \
+                         else bool(last(amplitude) < last(amplitude_ma)),
+        "vol_squeeze":  last_bool(vol_squeeze),
+        "squeeze_count": squeeze_count,
+    }
 
 
 @dataclass

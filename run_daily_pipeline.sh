@@ -23,6 +23,8 @@ sleep 60
 # 步骤2：缓存前复权日线（默认开启验证）
 echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_qfq_daily.py --date ${DATE} --refresh"
 ${PYTHON} ${WORKSPACE}/cache_qfq_daily.py --date ${DATE} --refresh >> ${LOG_DIR}/qfq_cache.log 2>&1
+sleep 60
+${PYTHON} ${WORKSPACE}/cache_raw_daily.py --date ${DATE} --refresh --refresh-list >> ${LOG_DIR}/raw_cache.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤2完成，休息60秒..."
 sleep 60
 
@@ -45,13 +47,19 @@ echo "[$(date '+%H:%M:%S')] 步骤5完成，休息60秒..."
 sleep 60
 
 # 步骤6：选股筛选
-echo "[$(date '+%H:%M:%S')] 步骤6/8: screen_double.py --date ${DATE}"
-${PYTHON} ${WORKSPACE}/review_screen/screen_double.py --date ${DATE} --top-n 250 --mode winner --gain20 20 --turnover 6 >> ${LOG_DIR}/screen_double.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤6/8: screen_double_winner.py --date ${DATE}"
+${PYTHON} ${WORKSPACE}/review_screen/screen_double_winner.py --date ${DATE} >> ${LOG_DIR}/screen_double.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤6完成，休息60秒..."
-sleep 60
+sleep 60 
 
-# 步骤7：收盘报告
-echo "[$(date '+%H:%M:%S')] 步骤7/8: closing_report.py"
+# 步骤7：选股筛选
+echo "[$(date '+%H:%M:%S')] 步骤7/8: screen_trend.py --date ${DATE}"
+${PYTHON} ${WORKSPACE}/screen_trend.py --date ${DATE} 
+echo "[$(date '+%H:%M:%S')] 步骤7完成，休息60秒..."
+sleep 60 
+
+# 步骤8：收盘报告
+echo "[$(date '+%H:%M:%S')] 步骤8/8: closing_report.py"
 #${PYTHON} ${WORKSPACE}/closing_report.py >> ${LOG_DIR}/closing_report.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤7完成，休息60秒..."
 sleep 60

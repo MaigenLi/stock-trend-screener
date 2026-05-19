@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
 全市场放量实时监控（分钟级精度）
-用法：python3 mootdx_full_volume_scan.py [--top N] [--ratio R] [--interval S]
+用法：python3 mootdx_full_volume_scan.py [--top N] [--ratio R] [--interval S] [--avg-days N]
 
-与 mootdx_volume_monitor.py 同架构：
-  昨日分时逐分钟累计 vs 今日实时累计量，同分钟点精确对比
-  量比 = 今日到N分钟累计量 / 昨日到N分钟累计量
+架构：
+  最近N日分时逐分钟累计均值 vs 今日实时累计量，同分钟点精确对比
+  量比 = 今日到N分钟累计量 / N日均到N分钟累计量
   放量判定：量比 ≥ ratio（默认 1.5x）
 
+--avg-days 参数：
+  --avg-days 1（默认） → 昨日分时对比（原有行为）
+  --avg-days 5         → 前5日分时均值对比（减少单日异常波动）
+
 用法示例：
-  python3 full_market_volume_scan.py                        # Top10, 5分钟刷新
-  python3 full_market_volume_scan.py --top 20 --ratio 2.0   # Top20, 2x阈值
-  python3 full_market_volume_scan.py --once                 # 单次扫描
+  python3 mootdx_full_volume_scan.py                        # Top80, 昨日基准, 5分钟刷新
+  python3 mootdx_full_volume_scan.py --avg-days 5           # 前5日均值基准
+  python3 mootdx_full_volume_scan.py --avg-days 5 --top 20 --ratio 2.0
+  python3 mootdx_full_volume_scan.py --once --avg-days 5    # 单次扫描
 """
 
 import argparse, re, sys, time
@@ -193,19 +198,34 @@ def find_last_trading_day(reference_date: date_type) -> date_type:
     return reference_date
 
 
+def find_last_n_trading_days(reference_date: date_type, n: int) -> list[date_type]:
+    """返回 reference_date 之前（不含）的最近 n 个交易日（倒序，最近的在最前）。"""
+    days = []
+    day = reference_date - timedelta(days=1)  # 从昨天开始，排除今天
+    for _ in range(n * 3):   # 留足够余量跳过周末/假日
+        if day.weekday() >= 5 or day in _holidays_2026:
+            day -= timedelta(days=1)
+            continue
+        days.append(day)
+        if len(days) >= n:
+            break
+        day -= timedelta(days=1)
+    return days  # 倒序：[最近1天, 最近2天, ...]
+
+
 # ═══════════════════════════════════════════════════════════
 # 昨日分时数据预加载（分钟精度，与 mootdx_volume_monitor 相同）
 # ═══════════════════════════════════════════════════════════
-def _fetch_yesterday_minute(code: str, yesterday_date: date_type,
-                            client) -> list | None:
+def _fetch_day_minute(code: str, day_date: date_type,
+                         client) -> list | None:
     """
-    获取单只股票昨日的 240 分钟累计量数组
-    返回 list[int]（长度 240, 每元素为到该分钟为止的累计量），失败返回 None
+    获取单只股票指定交易日的分时累计量数组。
+    返回 list[int]（每元素为到该分钟为止的累计量），失败返回 None。
     """
     mkt = auto_market(code)
-    date_int = (yesterday_date.year * 10000
-                + yesterday_date.month * 100
-                + yesterday_date.day)
+    date_int = (day_date.year * 10000
+                + day_date.month * 100
+                + day_date.day)
     try:
         bars = client.get_history_minute_time_data(mkt, code, date_int)
         if not bars or len(bars) < 200:  # 至少200分钟有效
@@ -218,6 +238,106 @@ def _fetch_yesterday_minute(code: str, yesterday_date: date_type,
         return cum
     except Exception:
         return None
+
+
+# ── 向后兼容别名 ──────────────────────────────────────────────
+def _fetch_yesterday_minute(code: str, yesterday_date: date_type,
+                           client) -> list | None:
+    return _fetch_day_minute(code, yesterday_date, client)
+
+
+def preload_avg_bars(all_codes: list, names_cache: dict,
+                     last_n_days: list[date_type],
+                     avg_days: int = 1,
+                     max_workers: int = _DEFAULT_PRELOAD_WORKERS) -> dict:
+    """
+    预加载最近 N 个交易日的分时累计量并计算均值。
+
+    last_n_days: 最近N个交易日的日期列表（倒序，最近的在最前）
+    avg_days:     实际参与均值的天数（≤ len(last_n_days)）
+
+    返回 {code: {"cum_avg": [240 floats], "cum_days": [list of 240-list],
+          "name": str, "last_close": float, "valid_days": int}}
+    """
+    from mootdx.quotes import Quotes
+
+    t0 = time.time()
+    result = {}
+    total = len(all_codes)
+    done = [0]
+    lock = threading.Lock()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    # days_to_fetch = last_n_days[:avg_days]（最近N天）
+    days_to_fetch = last_n_days[:avg_days]
+
+    def _worker(code):
+        raw = code.lower()
+        for pfx in ("sh", "sz", "bj"):
+            if raw.startswith(pfx):
+                raw = raw[2:]
+                break
+        c = gt.normalize_prefixed(code)
+        client = Quotes.factory(market="std")
+
+        all_cums = []  # list[list[int]]，各天有效分时
+        for day in days_to_fetch:
+            cum = _fetch_day_minute(raw, day, client.client)
+            if cum:
+                all_cums.append(cum)
+
+        if not all_cums:
+            return  # 无任何分时数据
+
+        valid_days = len(all_cums)
+        # 对每个分钟位求均值（不同天数可能有不同长度，取 min_len）
+        min_len = min(len(c) for c in all_cums)
+        avg_cum = []
+        for i in range(min_len):
+            vals = [c[i] for c in all_cums]
+            avg_cum.append(sum(vals) / valid_days)
+
+        # 补齐到 240 位（无数据的分钟用前一分钟的值）
+        if min_len < TOTAL_MINUTES:
+            last_val = avg_cum[-1] if avg_cum else 0
+            avg_cum += [last_val] * (TOTAL_MINUTES - min_len)
+
+        # 昨收
+        last_close = 0.0
+        try:
+            df = gt.load_qfq_history(c, refresh=False)
+            if df is not None and len(df) >= 1:
+                last_date = str(df["date"].iloc[-1])[:10]
+                if last_date >= today_str and len(df) >= 2:
+                    last_close = float(df["close"].iloc[-2])
+                else:
+                    last_close = float(df["close"].iloc[-1])
+        except Exception:
+            pass
+
+        with lock:
+            result[raw] = {
+                "cum_avg": avg_cum,        # 240 floats（均值）
+                "name": names_cache.get(code, ""),
+                "last_close": last_close,
+                "valid_days": valid_days,   # 实际参与均值的天数
+            }
+
+    workers = min(max_workers, len(all_codes))
+    day_labels = ", ".join(str(d) for d in days_to_fetch)
+    print(f"📥 预加载分时日均值（{avg_days}日: {day_labels}，{len(all_codes)} 只, {workers} 线程）...")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_worker, code): code for code in all_codes}
+        for future in as_completed(futures):
+            done[0] += 1
+            if done[0] % 500 == 0 or done[0] == total:
+                elapsed = time.time() - t0
+                eta = elapsed / done[0] * (total - done[0])
+                print(f"  进度: {done[0]}/{total} ({done[0]/total*100:.0f}%) "
+                      f"耗时={elapsed:.0f}s ETA={eta:.0f}s 已获取={len(result)}只",
+                      end="\r", flush=True)
+
+    print(f"\n✅ 分时日均值预加载完成: {len(result)} 只，耗时 {time.time()-t0:.1f}s")
+    return result
 
 
 def preload_yesterday_bars(all_codes: list, names_cache: dict,
@@ -333,7 +453,7 @@ def compute_ratio_from_minute(code_raw: str, quote: dict, cur_idx: int,
                               yesterday_data: dict | None) -> float | None:
     """
     计算量比（精确到当前分钟）
-    优先用昨日分时累计数组做同分钟对比
+    优先用分时累计数组做同分钟对比（日均值模式或昨日模式）
     回退到日线比例估算
     返回量比（float），数据不足返回 None
     """
@@ -341,14 +461,24 @@ def compute_ratio_from_minute(code_raw: str, quote: dict, cur_idx: int,
     if today_vol <= 0:
         return None
 
-    # ── 分钟精度 ──────────────────────────────────────
-    if yesterday_data is not None and "cum" in yesterday_data:
-        cum = yesterday_data["cum"]
-        cap = min(cur_idx, len(cum) - 1)
-        if cap >= 0:
-            yes_cum = cum[cap]
-            if yes_cum > 0:
-                return today_vol / yes_cum
+    # ── 分钟精度（日均值 cum_avg 或 单日 cum）───────────
+    if yesterday_data is not None:
+        # 优先用日均分时（preload_avg_bars）
+        if "cum_avg" in yesterday_data:
+            cum = yesterday_data["cum_avg"]
+            cap = min(cur_idx, len(cum) - 1)
+            if cap >= 0:
+                avg_cum = cum[cap]
+                if avg_cum > 0:
+                    return today_vol / avg_cum
+        # 兼容单日 cum（原有逻辑）
+        elif "cum" in yesterday_data:
+            cum = yesterday_data["cum"]
+            cap = min(cur_idx, len(cum) - 1)
+            if cap >= 0:
+                yes_cum = cum[cap]
+                if yes_cum > 0:
+                    return today_vol / yes_cum
 
     # ── 回退：日线比例 ────────────────────────────────
     yesterday_total = yesterday_data.get("yesterday_total", 0) if yesterday_data else 0
@@ -411,12 +541,15 @@ def render_top(top_data: list, cur_time: datetime, cur_idx: int,
     minute_label = minute_to_str(cur_idx)
     coverage = len(yesterday)
 
+    avg_days = getattr(args, 'avg_days', 1)
+    mode_label = f"{avg_days}日均" if avg_days > 1 else "昨日"
     title1 = (
         f"全市场放量监控 [分钟级]  |  {now_str} [{minute_label}]  |  "
         f"有效 {total_scanned}只  |  "
         f"分钟数据 {coverage}只  |  "
         f"放量 {breakout_count}只  |  "
         f"阈值 ≥{args.ratio}x  |  "
+        f"参比基准: {mode_label}  |  "
         f"第{cycle}轮  {cycle_elapsed:.1f}s"
     )
     pad = SEP_TOTAL - cjk_width(title1)
@@ -436,7 +569,7 @@ def render_top(top_data: list, cur_time: datetime, cur_idx: int,
     footer = (
         f"总计：{total_scanned} 只  |  量OK：{breakout_count}  |  "
         f"量NO：{total_scanned - breakout_count}  |  "
-        f"昨日 ▶ 今日 同分钟累计对比  |  Ctrl+C 退出"
+        f"{mode_label} ▶ 今日 同分钟累计对比  |  Ctrl+C 退出"
     )
     pad = SEP_TOTAL - cjk_width(strip_ansi(footer))
     if pad > 0:
@@ -525,18 +658,27 @@ def watch_loop(args, yesterday: dict, all_codes: list):
 # ═══════════════════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(description="全市场放量实时监控（分钟级精度）")
-    parser.add_argument("--top", "-n", type=int, default=20, help="显示前 N 只（默认20）")
+    parser.add_argument("--top", "-n", type=int, default=80, help="显示前 N 只（默认80）")
     parser.add_argument("--ratio", "-r", type=float, default=1.5, help="放量最低阈值（默认1.5x）")
-    parser.add_argument("--max-ratio", "-M", type=float, default=20, help="放量最高阈值（0=不限制，排除超过此值的股票）")
-    parser.add_argument("--interval", "-i", type=int, default=300, help="刷新间隔（秒，默认300）")
+    parser.add_argument("--max-ratio", "-M", type=float, default=8, help="放量最高阈值（0=不限制，排除超过此值的股票）")
+    parser.add_argument("--interval", "-i", type=int, default=120, help="刷新间隔（秒，默认120）")
     parser.add_argument("--once", action="store_true", help="单次扫描（不复刷新）")
     parser.add_argument("--preload-workers", type=int, default=_DEFAULT_PRELOAD_WORKERS,
                         help=f"预加载线程数（默认{_DEFAULT_PRELOAD_WORKERS}）")
+    parser.add_argument("--avg-days", type=int, default=5,
+                        help="参比基准天数（默认1=昨日，>1=前N日均值，如 --avg-days 5）")
     args = parser.parse_args()
 
-    # ── 确定上一交易日 ───────────────────────────────────
-    last_trading = find_last_trading_day(datetime.now().date())
-    print(f"📅 上一交易日: {last_trading}  |  今日: {datetime.now().strftime('%Y-%m-%d')}")
+    avg_days = max(1, args.avg_days)
+
+    # ── 确定最近 N 个交易日 ──────────────────────────────
+    last_n_days = find_last_n_trading_days(datetime.now().date(), avg_days)
+    if len(last_n_days) < avg_days:
+        print(f"⚠️  仅找到 {len(last_n_days)} 个历史交易日（请求{avg_days}日），继续")
+    day_labels = ", ".join(str(d) for d in last_n_days[:3])
+    if len(last_n_days) > 3:
+        day_labels += f"...（共{len(last_n_days)}日）"
+    print(f"📅 参比基准: 最近 {avg_days} 日  |  {day_labels}  |  今日: {datetime.now().strftime('%Y-%m-%d')}")
 
     # ── 加载代码 ─────────────────────────────────────────
     t0 = time.time()
@@ -544,12 +686,13 @@ def main():
     names_cache = gt.load_stock_names()
     print(f"📋 全市场股票: {len(all_codes)} 只")
 
-    # ── 预加载昨日分时 ───────────────────────────────────
-    yesterday = preload_yesterday_bars(all_codes, names_cache, last_trading,
-                                       max_workers=args.preload_workers)
+    # ── 预加载分时数据 ───────────────────────────────────
+    yesterday = preload_avg_bars(all_codes, names_cache, last_n_days,
+                                  avg_days=avg_days,
+                                  max_workers=args.preload_workers)
 
     if not yesterday:
-        print("❌ 昨日分时数据为空，退出")
+        print("❌ 分时数据为空，退出")
         return
 
     # ── 提取无前缀代码列表（与 mootdx 对齐）──────────────

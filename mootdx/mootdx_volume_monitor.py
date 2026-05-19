@@ -20,6 +20,14 @@ MARKET_BY_CODE = {
     1: lambda c: c.startswith(("6", "9")),   # 上海
     0: lambda c: c and c[0] in ("0", "1", "2", "3"),  # 深圳
 }
+# ── 过滤条件 ────────────────────────────────────────────────────────
+GAIN_MIN   = -3.0   # 涨幅下限%%（需 >= GAIN_MIN）
+GAIN_MAX   = 5.0   # 涨幅上限%%（需 < GAIN_MAX）
+
+# ── 市值加权量比参数 ────────────────────────────────────────────────
+MKT_BENCH  = 50.0  # 市值基准（亿元），大于此值权重 > 1（大盘股放量更难）
+MKT_POWER  = 0.25  # 市值权重幂次：权重 = (市值亿 / MKT_BENCH) ** MKT_POWER
+
 TOTAL_MINUTES = 240
 CLEAR_SCREEN  = "\033[2J\033[H"
 CLEAR_LINE    = "\033[2K"
@@ -45,6 +53,8 @@ def parse_args():
                         help="放量判定阈值，默认1.3倍")
     parser.add_argument("--count", "-c", type=int, default=0,
                         help="查询次数，0=无限循环（默认）")
+    parser.add_argument("--top", type=int, default=30,
+                        help="显示量比前N名，默认30，设为0则显示全部")
     group = parser.add_argument_group("消息预警")
     group.add_argument("--news", "-n", action="store_true",
                         help="同时抓取个股重大公告/提示（港澳资讯最新提示，踩坑专用）")
@@ -52,6 +62,8 @@ def parse_args():
                         help="开启 Tavily 网络新闻搜索（需 TAVILY_API_KEY 环境变量）")
     parser.add_argument("--output", "-o",
                         help="输出结果 JSON 文件路径")
+    parser.add_argument("--show-fail", action="store_true",
+                        help="显示获取实时数据失败的股票（默认隐藏）")
     return parser.parse_args()
 
 
@@ -153,15 +165,28 @@ def get_realtime(client, symbol: str, market: int) -> dict | None:
     except Exception:
         return None
 
+def get_market_cap(client, symbol: str, market: int, price: float) -> float:
+    """获取流通市值（亿元），失败返回 0.0"""
+    try:
+        fin = client.client.get_finance_info(market, symbol)
+        if fin and price and price > 0:
+            liutong = fin.get("liutongguben", 0)
+            if liutong and liutong > 0:
+                return price * liutong / 1e8
+        return 0.0
+    except Exception:
+        return 0.0
+
 
 def find_last_trading_day(reference_date: date_type) -> date_type:
     """
     从 reference_date 往前找最近一个有240分钟分时数据的交易日
     跳过周末，一路往前试最多14天
     用 get_history_minute_time_data（精确取指定日期的分时）
+    注意：不会返回 reference_date 本身，只返回更早的交易日作为基准
     """
     from datetime import timedelta
-    day = reference_date
+    day = reference_date - timedelta(days=1)  # 从前一天开始找，避免与reference_date重叠
     for _ in range(14):
         if day.weekday() >= 5:          # 跳过周末
             day -= timedelta(days=1)
@@ -171,7 +196,7 @@ def find_last_trading_day(reference_date: date_type) -> date_type:
         if len(bars) >= 230:             # 230根以上算有效交易日
             return day
         day -= timedelta(days=1)
-    return reference_date               # 兜底返回原日期
+    return reference_date - timedelta(days=1)  # 兜底返回前一天
 
 
 def get_history_minute_bar(date_int: int, symbol: str, market: int) -> list:
@@ -343,37 +368,43 @@ def strip_ansi(s: str) -> str:
 # --------------------------------------------------------------------------- #
 # 渲染引擎（原地刷新）
 # --------------------------------------------------------------------------- #
-#  列定义：代码 | 名称 | 昨收盘 | 今开盘 | 成交价 |     成交量     |     量比     | 放量标识
-#  左对齐      左对齐    右对齐   右对齐   右对齐       右对齐           右对齐      左对齐
+#  列定义：代码 | 名称 | 市值(亿) | 昨收盘 | 今开盘 | 成交价 |     成交量     |     量比     | 加权量比 | 放量标识
+#  左对齐      左对齐   右对齐     右对齐   右对齐   右对齐       右对齐           右对齐        右对齐     左对齐
 
 W_CODE  = 6
 W_NAME  = 8
+W_MKTCAP = 9
 W_LAST  = 7
 W_OPEN  = 7
 W_PRICE = 8
 W_VOL   = 12
 W_RATIO = 8
+W_WEIGHTED = 9
 W_FLAG  = 10
 
 # 列间距（额外空格）
 GAP_CODE_NAME = 2
-GAP_NAME_LAST = 2
+GAP_NAME_MKTCAP = 2
+GAP_MKTCAP_LAST = 2
 GAP_LAST_OPEN = 2
 GAP_OPEN_PRICE = 2
-GAP_PRICE_VOL = 3   # 成交价到成交量：加大
-GAP_VOL_RATIO  = 4   # 成交量到量比：加大
-GAP_RATIO_FLAG = 4   # 量比到放量标识：加大
+GAP_PRICE_VOL = 3
+GAP_VOL_RATIO  = 3
+GAP_RATIO_WEIGHTED = 3
+GAP_WEIGHTED_FLAG = 3
 
-# 终端显示总宽度（CJK 双重宽度感知）
+# 终端显示总宽度
 SEP_TOTAL = (
     cjk_width("代码") + GAP_CODE_NAME
-    + W_NAME + GAP_NAME_LAST  # 名称列以 display width 补齐到 W_NAME
-    + cjk_width("昨收盘") + GAP_LAST_OPEN
-    + cjk_width("今开盘") + GAP_OPEN_PRICE
+    + W_NAME + GAP_NAME_MKTCAP
+    + W_MKTCAP + GAP_MKTCAP_LAST
+    + cjk_width("昨收") + GAP_LAST_OPEN
+    + cjk_width("今开") + GAP_OPEN_PRICE
     + cjk_width("成交价") + GAP_PRICE_VOL
     + W_VOL + GAP_VOL_RATIO
-    + W_RATIO + GAP_RATIO_FLAG
-    + cjk_width("放量标识") + 4  # ✅ + 空格 + verdic段
+    + W_RATIO + GAP_RATIO_WEIGHTED
+    + W_WEIGHTED + GAP_WEIGHTED_FLAG
+    + cjk_width("标识") + 4
 )
 
 def sep_line() -> str:
@@ -384,12 +415,14 @@ def hdr_line() -> str:
     return (
         f"{CLEAR_LINE}"
         f"{pad_to_width('代码', W_CODE)}{' ' * GAP_CODE_NAME}"
-        f"{pad_to_width('名称', W_NAME)}{' ' * GAP_NAME_LAST}"
-        f"{pad_to_width('昨日', W_LAST, '>')}{' ' * GAP_LAST_OPEN}"
-        f"{pad_to_width('今日', W_OPEN, '>')}{' ' * GAP_OPEN_PRICE}"
-        f"{pad_to_width('交价', W_PRICE, '>')}{' ' * GAP_PRICE_VOL}"
-        f"{pad_to_width('交量', W_VOL, '>')}{' ' * GAP_VOL_RATIO}"
-        f"{pad_to_width('量比', W_RATIO, '>')}{' ' * GAP_RATIO_FLAG}"
+        f"{pad_to_width('名称', W_NAME)}{' ' * GAP_NAME_MKTCAP}"
+        f"{pad_to_width('市值', W_MKTCAP, '>')}{' ' * GAP_MKTCAP_LAST}"
+        f"{pad_to_width('昨收', W_LAST, '>')}{' ' * GAP_LAST_OPEN}"
+        f"{pad_to_width('今开', W_OPEN, '>')}{' ' * GAP_OPEN_PRICE}"
+        f"{pad_to_width('成交价', W_PRICE, '>')}{' ' * GAP_PRICE_VOL}"
+        f"{pad_to_width('成交量', W_VOL, '>')}{' ' * GAP_VOL_RATIO}"
+        f"{pad_to_width('量比', W_RATIO, '>')}{' ' * GAP_RATIO_WEIGHTED}"
+        f"{pad_to_width('加权量', W_WEIGHTED, '>')}{' ' * GAP_WEIGHTED_FLAG}"
         f"{pad_to_width('标识', W_FLAG)}"
         "\n"
     )
@@ -398,7 +431,9 @@ def hdr_line() -> str:
 def data_line(code: str, name: str,
               last_close: float, today_open: float,
               price, vol: int,
-              ratio: float, is_breakout: bool, verdict: str,
+              ratio: float, mktcap_亿: float,
+              weighted_ratio: float,
+              is_breakout: bool, verdict: str,
               err: str = "") -> str:
     flag = "✅" if is_breakout else "  "
 
@@ -413,6 +448,8 @@ def data_line(code: str, name: str,
     price_str = f"{price:>{W_PRICE}.2f}" if price else f"{'N/A':>{W_PRICE}}"
     vol_str   = f"{int(vol):>{W_VOL},}" if vol else f"{'N/A':>{W_VOL}}"
     ratio_str = f"{ratio * 100:>{W_RATIO - 1}.1f}%" if ratio else f"{'N/A':>{W_RATIO}}"
+    cap_str   = f"{mktcap_亿:>{W_MKTCAP - 1}.0f}亿" if mktcap_亿 else f"{'N/A':>{W_MKTCAP}}"
+    w_str     = f"{weighted_ratio * 100:>{W_WEIGHTED - 1}.1f}%" if weighted_ratio else f"{'N/A':>{W_WEIGHTED}}"
     chg_str   = ""
     if price and last_close:
         pct = (price - last_close) / last_close * 100
@@ -421,12 +458,14 @@ def data_line(code: str, name: str,
     return (
         f"{CLEAR_LINE}"
         f"{pad_to_width(code, W_CODE)}{' ' * GAP_CODE_NAME}"
-        f"{pad_to_width(name, W_NAME)}{' ' * GAP_NAME_LAST}"
+        f"{pad_to_width(name, W_NAME)}{' ' * GAP_NAME_MKTCAP}"
+        f"{cap_str}{' ' * GAP_MKTCAP_LAST}"
         f"{last_close:>{W_LAST}.2f}{' ' * GAP_LAST_OPEN}"
         f"{today_open:>{W_OPEN}.2f}{' ' * GAP_OPEN_PRICE}"
         f"{price_str}{' ' * GAP_PRICE_VOL}"
         f"{vol_str}{' ' * GAP_VOL_RATIO}"
-        f"{ratio_str}{' ' * GAP_RATIO_FLAG}"
+        f"{ratio_str}{' ' * GAP_RATIO_WEIGHTED}"
+        f"{w_str}{' ' * GAP_WEIGHTED_FLAG}"
         f"{flag} {verdict}{chg_str}"
         "\n"
     )
@@ -473,6 +512,11 @@ def render(records: list, cur_time: datetime, cur_idx: int) -> None:
             r.get("current", {}).get("price"),
             r.get("current", {}).get("vol") or r.get("current", {}).get("today_cumsum_vol", 0) or 0,
             r.get("volume_analysis", {}).get("vol_ratio", 0.0),
+            r.get("volume_analysis", {}).get("mktcap_亿", 0.0) or 0,
+            (lambda vr, cap: vr * (cap / MKT_BENCH) ** MKT_POWER if cap > 0 else vr)(
+                r.get("volume_analysis", {}).get("vol_ratio", 0.0) or 0,
+                r.get("volume_analysis", {}).get("mktcap_亿", 0.0) or 0,
+            ),
             r.get("volume_analysis", {}).get("is_breakout", False),
             r.get("volume_analysis", {}).get("verdict", "---"),
             r.get("error", ""),
@@ -564,18 +608,70 @@ def main():
 
             # 批量获取实时行情（一次 API 调用，大幅提速）
             quotes_map = {}
-            try:
-                batch_codes = [(auto_market(s["code"]), s["code"]) for s in stocks]
-                batch_result = client.client.get_security_quotes(batch_codes)
-                for q in (batch_result or []):
-                    quotes_map[q["code"]] = q
-            except Exception:
-                pass
+            batch_ok = False
+            for attempt in range(3):  # 最多重试2次
+                try:
+                    batch_codes = [(auto_market(s["code"]), s["code"]) for s in stocks]
+                    batch_result = client.client.get_security_quotes(batch_codes)
+                    for q in (batch_result or []):
+                        quotes_map[q["code"]] = q
+                    batch_ok = True
+                    break
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(0.5)  # 等待后重试
+                    pass  # 重试后仍失败则保留 quotes_map（可能部分有数据）
+
+            # 如果批量接口完全失败，回退到逐只查询（慢但可靠）
+            if not quotes_map:
+                for stock in stocks:
+                    code = stock["code"]
+                    mkt = auto_market(code)
+                    try:
+                        rt = get_realtime(client, code, mkt)
+                        if rt:
+                            quotes_map[code] = rt
+                    except Exception:
+                        pass
+
+            # 补充缺失数据：逐只补全批量中遗漏的股票（最多3次）
+            missing = [s for s in stocks if s["code"] not in quotes_map]
+            for _ in range(3):
+                if not missing:
+                    break
+                still_missing = []
+                for stock in missing:
+                    code = stock["code"]
+                    mkt = auto_market(code)
+                    try:
+                        rt = get_realtime(client, code, mkt)
+                        if rt:
+                            quotes_map[code] = rt
+                        else:
+                            still_missing.append(stock)
+                    except Exception:
+                        still_missing.append(stock)
+                missing = still_missing
+                if missing:
+                    time.sleep(0.3)  # 避免过快请求
 
             # 午休标识
             is_lunch_break = (cur_idx < 0
                               and cur_time.hour >= 11
                               and cur_time.hour < 13)
+
+
+            # ── 按量比降序排列，取前N名 ───────────────────────────────────
+                # 市值加权量比 = vol_ratio × (市值亿 / MKT_BENCH) ** MKT_POWER
+                # 50亿为基准：>50亿权重>1（大盘股放量更难，更值得关注）
+                # <50亿权重<1（小盘股天然放量容易，权重降低）
+            def weighted_ratio(r: dict) -> float:
+                vr  = r.get("volume_analysis", {}).get("vol_ratio", 0) or 0
+                cap = r.get("volume_analysis", {}).get("mktcap_亿", 0) or 0
+                if cap <= 0:
+                    return vr
+                coef = (cap / MKT_BENCH) ** MKT_POWER
+                return vr * coef
 
             for stock in stocks:
                 code = stock["code"]
@@ -584,6 +680,17 @@ def main():
                 mkt = auto_market(code)
 
                 quote = quotes_map.get(code)
+
+                # ── 涨幅过滤：GAIN_MIN < 涨幅 < GAIN_MAX ───────────────────────
+                gain = None
+                if quote:
+                    price = quote.get("price")
+                    last_close = quote.get("last_close")
+                    if price and last_close and last_close > 0:
+                        gain = (price - last_close) / last_close * 100
+                if gain is None or not (GAIN_MIN <= gain < GAIN_MAX):
+                    # 涨幅不在区间内
+                    continue
 
                 # ── 消息预警（踩坑检测）────────
                 news_excerpt = ""
@@ -649,6 +756,8 @@ def main():
                         "vol_ratio":        round(ratio_val, 2),
                         "is_breakout":      is_breakout,
                         "verdict":          verdict,
+                        "mktcap_亿": round(get_market_cap(client, code, mkt, quote.get("price") or 0), 1)
+                        if quote and quote.get("price") else 0.0,
                     },
                     "error": None if quote else "获取实时数据失败",
                     "news_excerpt": news_excerpt,
@@ -658,7 +767,31 @@ def main():
                 if is_breakout:
                     breakouts.append(records[-1])
 
-            render(records, cur_time, cur_idx)
+
+            valid_records = [r for r in records if not r.get("error")]
+            fail_records  = [r for r in records if     r.get("error")]
+            valid_records.sort(key=weighted_ratio, reverse=True)
+            display_n = args.top if args.top > 0 else len(valid_records)
+            top_n = valid_records[:display_n]
+            # --show-fail 时，在尾部追加获取失败的股票（单独显示）
+            if args.show_fail and fail_records:
+                top_n = top_n + fail_records
+            breakouts = [r for r in top_n if r.get("volume_analysis", {}).get("is_breakout")]
+
+            render(top_n, cur_time, cur_idx)
+
+            # ── 写入 DRFLGP.blk（量比排名股票池）──────────────────────
+            blk_path = Path("/mnt/d/new_tdx/T0002/blocknew/DRFLGP.blk")
+            blk_lines = ["", ] + [str(auto_market(r["code"])) + r["code"]
+                                   for r in top_n if not r.get("error")]
+            new_content = "\r\n".join(blk_lines) + "\r\n"
+            try:
+                old_content = blk_path.read_bytes() if blk_path.exists() else b""
+            except Exception:
+                old_content = b""
+            if new_content.encode("utf-8") != old_content:
+                blk_path.parent.mkdir(parents=True, exist_ok=True)
+                blk_path.write_bytes(new_content.encode("utf-8"))
 
             if args.output:
                 out_path = Path(args.output)
@@ -667,13 +800,14 @@ def main():
                     json.dump({
                         "query_time":          cur_time.isoformat(),
                         "target_date":         args.date,
-                        "cur_minute_idx":      cur_idx,
-                        "minute_label":        minute_to_str(cur_idx),
-                        "interval":            args.interval,
-                        "vol_ratio_threshold": args.vol_ratio,
-                        "total":              len(records),
-                        "breakout_count":      len(breakouts),
-                        "records":             records,
+                        "cur_minute_idx":       cur_idx,
+                        "minute_label":         minute_to_str(cur_idx),
+                        "interval":             args.interval,
+                        "vol_ratio_threshold":  args.vol_ratio,
+                        "total":               len(valid_records),
+                        "fail_count":          len(fail_records),
+                        "breakout_count":       len(breakouts),
+                        "records":              valid_records,
                     }, f, ensure_ascii=False, indent=2)
 
             if args.count > 0 and count >= args.count:
