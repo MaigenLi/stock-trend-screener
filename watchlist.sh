@@ -11,4 +11,4 @@ find ~/.openclaw/workspace/stock_trend -name "__pycache__" -exec rm -rf {} +
 
 echo "========== 每日自选盯盘 [${DATE}] =========="
 #${PYTHON} ${WORKSPACE}/mootdx/mootdx_volume_monitor.py --news --tavily
-${PYTHON} ${WORKSPACE}/mootdx/mootdx_volume_monitor.py --top 20
+${PYTHON} ${WORKSPACE}/mootdx/mootdx_volume_monitor.py --top 50

@@ -140,6 +140,9 @@ def _load_df(code, end_date=None, data_mode="raw"):
     return df
 
 # ── 参数 ──────────────────────────────────────────────────
+RED_CROSS = '\033[91m✗\033[0m'
+GREEN_CHECK = '\033[92m✓\033[0m'
+
 TURNOVER_LEN  = 5     # 近5日
 
 # ── 换手率-市值幂律适配 ───────────────────────────────
@@ -343,54 +346,92 @@ def _cond2a_slope_atr(idx, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr):
     ok = ok5 and ok10 and ok20
     if not ok:
         msg = []
-        msg.append(f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f}) {'✓' if ok5 else '✗'}") 
-        msg.append(f" MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX}:.3f) {'✓' if ok10 else '✗'}")
-        msg.append(f" MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f}) {'✓' if ok20 else '✗'}")
+        msg.append(f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f}) {GREEN_CHECK if ok5 else RED_CROSS}") 
+        msg.append(f" MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX}:.3f) {GREEN_CHECK if ok10 else RED_CROSS}")
+        msg.append(f" MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f}) {GREEN_CHECK if ok20 else RED_CROSS}")
         return False, " ".join(msg)
     return True, f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f}) MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX}:.3f) MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f})"
 
 def _cond2a_2_slope_atr(idx, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr):
-    """②-1 均线斜率/ATR波动率在合理区间（方向向上但不过热）"""
+    """②-1 均线斜率/ATR波动率在合理区间 """
     ok5  = SLOPE_MA5_ATR2  <= ma5_slope_atr[idx]  < SLOPE_MA5_ATR_MAX2
     ok10 = SLOPE_MA10_ATR2 <= ma10_slope_atr[idx] < SLOPE_MA10_ATR_MAX2
     ok20 = SLOPE_MA20_ATR2 <= ma20_slope_atr[idx] < SLOPE_MA20_ATR_MAX2
     ok = ok5 and ok10 and ok20
     if not ok:
         msg = []
-        msg.append(f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR2:.3f},{SLOPE_MA5_ATR_MAX2:.3f}) {'✓' if ok5 else '✗'}") 
-        msg.append(f" MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR2:.3f},{SLOPE_MA10_ATR_MAX2:.3f}) {'✓' if ok10 else '✗'}")
-        msg.append(f" MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR2:.3f},{SLOPE_MA20_ATR_MAX2:.3f}) {'✓' if ok20 else '✗'}")
+        msg.append(f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR2:.3f},{SLOPE_MA5_ATR_MAX2:.3f}) {GREEN_CHECK if ok5 else RED_CROSS}") 
+        msg.append(f" MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR2:.3f},{SLOPE_MA10_ATR_MAX2:.3f}) {GREEN_CHECK if ok10 else RED_CROSS}")
+        msg.append(f" MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR2:.3f},{SLOPE_MA20_ATR_MAX2:.3f}) {GREEN_CHECK if ok20 else RED_CROSS}")
         return False, " ".join(msg)
     return True, f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR2:.3f},{SLOPE_MA5_ATR_MAX2:.3f}) MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR2:.3f},{SLOPE_MA10_ATR_MAX2}:.3f) MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR2:.3f},{SLOPE_MA20_ATR_MAX2:.3f})"
 
 def _cond2a_3_slope_atr(idx, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr):
-    """②-1 均线斜率/ATR波动率在合理区间（方向向上但不过热）"""
+    """②-1 均线斜率/ATR波动率在合理区间 """
     ok5  = SLOPE_MA5_ATR3  <= ma5_slope_atr[idx]  < SLOPE_MA5_ATR_MAX3
     ok10 = SLOPE_MA10_ATR3 <= ma10_slope_atr[idx] < SLOPE_MA10_ATR_MAX3
     ok20 = SLOPE_MA20_ATR3 <= ma20_slope_atr[idx] < SLOPE_MA20_ATR_MAX3
     ok = ok5 and ok10 and ok20
     if not ok:
         msg = []
-        msg.append(f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR3:.3f},{SLOPE_MA5_ATR_MAX3:.3f}) {'✓' if ok5 else '✗'}") 
-        msg.append(f" MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR3:.3f},{SLOPE_MA10_ATR_MAX3:.3f}) {'✓' if ok10 else '✗'}")
-        msg.append(f" MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR3:.3f},{SLOPE_MA20_ATR_MAX3:.3f}) {'✓' if ok20 else '✗'}")
+        msg.append(f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR3:.3f},{SLOPE_MA5_ATR_MAX3:.3f}) {GREEN_CHECK if ok5 else RED_CROSS}") 
+        msg.append(f" MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR3:.3f},{SLOPE_MA10_ATR_MAX3:.3f}) {GREEN_CHECK if ok10 else RED_CROSS}")
+        msg.append(f" MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR3:.3f},{SLOPE_MA20_ATR_MAX3:.3f}) {GREEN_CHECK if ok20 else RED_CROSS}")
         return False, " ".join(msg)
     return True, f"MA5_atr={ma5_slope_atr[idx]:.3f} [{SLOPE_MA5_ATR3:.3f},{SLOPE_MA5_ATR_MAX3:.3f}) MA10_atr={ma10_slope_atr[idx]:.3f} [{SLOPE_MA10_ATR3:.3f},{SLOPE_MA10_ATR_MAX3}:.3f) MA20_atr={ma20_slope_atr[idx]:.3f} [{SLOPE_MA20_ATR3:.3f},{SLOPE_MA20_ATR_MAX3:.3f})"
 
-def _cond2b_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily):
+def _cond2b_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
     """②-2 MA5/MA10/MA20 日变 >= 阈值（均线向上推，目标股多为缓涨/横走）"""
     ok = ma5_daily >= MA5_DAILY and ma10_daily >= MA10_DAILY and ma20_daily >= MA20_DAILY
-    return ok, f"MA5_daily={ma5_daily:.3f}%>={MA5_DAILY:.2f}% MA10_daily={ma10_daily:.3f}%>={MA10_DAILY:.2f}% MA20_daily={ma20_daily:.3f}%>={MA20_DAILY:.2f}%"
 
-def _cond2b_2_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily):
-    """②-2 MA5/MA10/MA20 日变 >= 阈值（均线向上推，目标股多为缓涨/横走）"""
+    gain5    = (close[idx]/close[idx-5]-1)*100 if idx>=5 else float('nan')
+    gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
+    ok5 = GAIN5_MIN <= gain5 <= GAIN5_MAX
+    ok20 = GAIN20_MIN <= gain20 <= GAIN20_MAX
+    msg = []
+
+    msg.append(f"MA5_daily={ma5_daily:.3f}%>={MA5_DAILY:.2f}% MA10_daily={ma10_daily:.3f}%>={MA10_DAILY:.2f}% MA20_daily={ma20_daily:.3f}%>={MA20_DAILY:.2f}% {GREEN_CHECK if ok else RED_CROSS}") 
+    msg.append(f" 5日涨幅{gain5:+.1f}% ∈ [{GAIN5_MIN},{GAIN5_MAX}]% {GREEN_CHECK if ok5 else RED_CROSS} 20日涨幅{gain20:+.1f}% ∈ [{GAIN20_MIN},{GAIN20_MAX}]% {GREEN_CHECK if ok20 else RED_CROSS}") 
+
+    if ok and ok5 and ok20:
+        return True, " ".join(msg)
+    else:
+        return False, " ".join(msg)
+
+def _cond2b_2_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
+    """②-2 MA5/MA10/MA20 日变 >= 阈值（主升浪、短线强势股）"""
     ok = ma5_daily >= MA5_DAILY2 and ma10_daily >= MA10_DAILY2 and ma20_daily >= MA20_DAILY2
-    return ok, f"MA5_daily={ma5_daily:.3f}%>={MA5_DAILY2:.2f}% MA10_daily={ma10_daily:.3f}%>={MA10_DAILY2:.2f}% MA20_daily={ma20_daily:.3f}%>={MA20_DAILY2:.2f}%"
 
-def _cond2b_3_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily):
-    """②-3 MA5/MA10/MA20 日变 >= 阈值（均线向上推，目标股多为缓涨/横走）"""
+    gain5    = (close[idx]/close[idx-5]-1)*100 if idx>=5 else float('nan')
+    gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
+    ok5 = GAIN5_MIN2 <= gain5 <= GAIN5_MAX2
+    ok20 = GAIN20_MIN2 <= gain20 <= GAIN20_MAX2
+    msg = []
+
+    msg.append(f"MA5_daily={ma5_daily:.3f}%>={MA5_DAILY2:.2f}% MA10_daily={ma10_daily:.3f}%>={MA10_DAILY2:.2f}% MA20_daily={ma20_daily:.3f}%>={MA20_DAILY2:.2f}% {GREEN_CHECK if ok else RED_CROSS}") 
+    msg.append(f" 5日涨幅{gain5:+.1f}% ∈ [{GAIN5_MIN2},{GAIN5_MAX2}]% {GREEN_CHECK if ok5 else RED_CROSS} 20日涨幅{gain20:+.1f}% ∈ [{GAIN20_MIN2},{GAIN20_MAX2}]% {GREEN_CHECK if ok20 else RED_CROSS}") 
+
+    if ok and ok5 and ok20:
+        return True, " ".join(msg)
+    else:
+        return False, " ".join(msg)
+
+def _cond2b_3_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
+    """②-3 MA5/MA10/MA20 日变 >= 阈值（中期趋势延续但短期休整/平台蓄势股）"""
     ok = ma5_daily >= MA5_DAILY3 and ma10_daily >= MA10_DAILY3 and ma20_daily >= MA20_DAILY3
-    return ok, f"MA5_daily={ma5_daily:.3f}%>={MA5_DAILY3:.2f}% MA10_daily={ma10_daily:.3f}%>={MA10_DAILY3:.2f}% MA20_daily={ma20_daily:.3f}%>={MA20_DAILY3:.2f}%"
+    gain5    = (close[idx]/close[idx-5]-1)*100 if idx>=5 else float('nan')
+    gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
+    ok5 = GAIN5_MIN3 <= gain5 <= GAIN5_MAX3
+    ok20 = GAIN20_MIN3 <= gain20 <= GAIN20_MAX3
+    msg = []
+
+    msg.append(f"MA5_daily={ma5_daily:.3f}%>={MA5_DAILY3:.2f}% MA10_daily={ma10_daily:.3f}%>={MA10_DAILY3:.2f}% MA20_daily={ma20_daily:.3f}%>={MA20_DAILY3:.2f}% {GREEN_CHECK if ok else RED_CROSS}") 
+    msg.append(f" 5日涨幅{gain5:+.1f}% ∈ [{GAIN5_MIN3},{GAIN5_MAX3}]% {GREEN_CHECK if ok5 else RED_CROSS} 20日涨幅{gain20:+.1f}% ∈ [{GAIN20_MIN3},{GAIN20_MAX3}]% {GREEN_CHECK if ok20 else RED_CROSS}") 
+
+    if ok and ok5 and ok20:
+        return True, " ".join(msg)
+    else:
+        return False, " ".join(msg)
 
 def _cond3_mktcap(idx, mktcap):
     """③ 流通市值 >= 下限"""
@@ -574,12 +615,12 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
 
     recent_20_high = float(np.max(close[i - 19:i + 1])) if i >= 19 else float(np.max(close[:i + 1]))
     is_20high = _cond_lim_20high(i, close, recent_20_high)
-    lines.append(f"  ① 涨停 {is_limitup}（涨停价={limit_up_price:.2f}  20日最高={recent_20_high:.2f}） → {'✓' if is_limitup else '✗'}")
-    lines.append(f"  ①' 20日最高 {is_20high}（close={close[i]:.2f} ≥ {recent_20_high*0.9999:.2f}） → {'✓' if is_20high else '✗'}")
+    lines.append(f"  ① 涨停 {is_limitup}（涨停价={limit_up_price:.2f}  20日最高={recent_20_high:.2f}） → {GREEN_CHECK if is_limitup else RED_CROSS}")
+    lines.append(f"  ①' 20日最高 {is_20high}（close={close[i]:.2f} ≥ {recent_20_high*0.9999:.2f}） → {GREEN_CHECK if is_20high else RED_CROSS}")
 
     # ── 均线多头 ──
     ok_all = _cond_lim_均线多头(i, ma5, ma10, ma20, ma60, close)
-    lines.append(f"  ② close>{ma5[i]:.2f}>{ma10[i]:.2f}>{ma20[i]:.2f} 且 >{ma60[i]:.2f} → {'✓' if ok_all else '✗'}")
+    lines.append(f"  ② close>{ma5[i]:.2f}>{ma10[i]:.2f}>{ma20[i]:.2f} 且 >{ma60[i]:.2f} → {GREEN_CHECK if ok_all else RED_CROSS}")
 
 
     # ── 均线多头 ──
@@ -587,7 +628,7 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
     ok2 = ma5[i] > (ma10[i] * 0.99)
     ok3 = ma5[i] > (ma20[i] * 0.99)
     ok_all = ok1 and ok2 and ok3
-    lines.append(f"  ② close>{ma5[i]:.2f}>{ma10[i]:.2f}>{ma20[i]:.2f} 且 >{ma60[i]:.2f} → {'✓' if ok_all else '✗'}")
+    lines.append(f"  ② close>{ma5[i]:.2f}>{ma10[i]:.2f}>{ma20[i]:.2f} 且 >{ma60[i]:.2f} → {GREEN_CHECK if ok_all else RED_CROSS}")
 
     # ── ATR ──
     has_pre_atr = "_atr_pct" in df.columns
@@ -610,29 +651,29 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
     ok_ma5_slope, ok_ma5_daily = _cond_lim_ma5_accel(i, ma5_slope_atr, ma5_daily_i)
     ok_ma10_slope = _cond_lim_ma10_slope(i, ma10_slope_atr)
     ok_ma20_slope = _cond_lim_ma20_slope(i, ma20_slope_atr)
-    lines.append(f"  ③ ma5_slope_atr={ma5_slope_atr[i]:.3f} > {LIMITUP_I_SLOPE_MA5} → {'✓' if ok_ma5_slope else '✗'}")
-    lines.append(f"     ma5_daily={ma5_daily_i:.3f}% > {LIMITUP_I_DAILY_MA5}% → {'✓' if ok_ma5_daily else '✗'}")
-    lines.append(f"     ma10_slope_atr={ma10_slope_atr[i]:.3f} < {LIMITUP_I_SLOPE_MA10} → {'✓' if ok_ma10_slope else '✗'}")
-    lines.append(f"     ma20_slope_atr={ma20_slope_atr[i]:.3f} < {LIMITUP_I_SLOPE_MA20} → {'✓' if ok_ma20_slope else '✗'}")
+    lines.append(f"  ③ ma5_slope_atr={ma5_slope_atr[i]:.3f} > {LIMITUP_I_SLOPE_MA5} → {GREEN_CHECK if ok_ma5_slope else RED_CROSS}")
+    lines.append(f"     ma5_daily={ma5_daily_i:.3f}% > {LIMITUP_I_DAILY_MA5}% → {GREEN_CHECK if ok_ma5_daily else RED_CROSS}")
+    lines.append(f"     ma10_slope_atr={ma10_slope_atr[i]:.3f} < {LIMITUP_I_SLOPE_MA10} → {GREEN_CHECK if ok_ma10_slope else RED_CROSS}")
+    lines.append(f"     ma20_slope_atr={ma20_slope_atr[i]:.3f} < {LIMITUP_I_SLOPE_MA20} → {GREEN_CHECK if ok_ma20_slope else RED_CROSS}")
 
     ok_turnover = _cond_lim_量比(i, df)
-    lines.append(f"     当日放量（量比≥{LIMITUP_I_VOLUME}） → {'✓' if ok_turnover else '✗'}")
+    lines.append(f"     当日放量（量比≥{LIMITUP_I_VOLUME}） → {GREEN_CHECK if ok_turnover else RED_CROSS}")
 
     # ── i-1 日条件 ──
     ma5_daily_i1 = (ma5[i - 1] / ma5[i - 2] - 1) * 100 if i - 1 >= 1 else -999
     ok_gain1, ok_slope1, ok_daily1, gain_i1 = _cond_lim_i1(i, close, ma5_slope_atr, ma5_daily_i1, ma5)
     lines.append(f"【前1天 {str(df.iloc[i-1]['date'])[:10]}】")
-    lines.append(f"  涨幅={gain_i1:.2f}% < {LIMITUP_GAIN_DAY_MAX:.2f}% → {'✓' if ok_gain1 else '✗'}")
-    lines.append(f"  ma5_slope_atr={ma5_slope_atr[i-1]:.3f} < {LIMITUP_I1_SLOPE_MA5_U} → {'✓' if ok_slope1 else '✗'}")
-    lines.append(f"  ma5_daily={ma5_daily_i1:.3f}% < {LIMITUP_I1_DAILY_U}% → {'✓' if ok_daily1 else '✗'}")
+    lines.append(f"  涨幅={gain_i1:.2f}% < {LIMITUP_GAIN_DAY_MAX:.2f}% → {GREEN_CHECK if ok_gain1 else RED_CROSS}")
+    lines.append(f"  ma5_slope_atr={ma5_slope_atr[i-1]:.3f} < {LIMITUP_I1_SLOPE_MA5_U} → {GREEN_CHECK if ok_slope1 else RED_CROSS}")
+    lines.append(f"  ma5_daily={ma5_daily_i1:.3f}% < {LIMITUP_I1_DAILY_U}% → {GREEN_CHECK if ok_daily1 else RED_CROSS}")
 
     # ── i-2 日条件 ──
     ma5_daily_i2 = (ma5[i - 2] / ma5[i - 3] - 1) * 100 if i - 2 >= 1 else -999
     ok_gain2, ok_slope2, ok_daily2, gain_i2 = _cond_lim_i2(i, close, ma5_slope_atr, ma5_daily_i2, ma5)
     lines.append(f"【前2天 {str(df.iloc[i-2]['date'])[:10]}】")
-    lines.append(f"  涨幅={gain_i2:.2f}% < {LIMITUP_GAIN_DAY_MAX:.2f}% → {'✓' if ok_gain2 else '✗'}")
-    lines.append(f"  ma5_slope_atr={ma5_slope_atr[i-2]:.3f} < {LIMITUP_I2_SLOPE_MA5_U} → {'✓' if ok_slope2 else '✗'}")
-    lines.append(f"  ma5_daily={ma5_daily_i2:.3f}% < {LIMITUP_I2_DAILY_U}% → {'✓' if ok_daily2 else '✗'}")
+    lines.append(f"  涨幅={gain_i2:.2f}% < {LIMITUP_GAIN_DAY_MAX:.2f}% → {GREEN_CHECK if ok_gain2 else RED_CROSS}")
+    lines.append(f"  ma5_slope_atr={ma5_slope_atr[i-2]:.3f} < {LIMITUP_I2_SLOPE_MA5_U} → {GREEN_CHECK if ok_slope2 else RED_CROSS}")
+    lines.append(f"  ma5_daily={ma5_daily_i2:.3f}% < {LIMITUP_I2_DAILY_U}% → {GREEN_CHECK if ok_daily2 else RED_CROSS}")
 
     passed = (is_limitup and is_20high and ok_all and ok_ma5_slope and ok_ma5_daily
               and ok_ma10_slope and ok_ma20_slope and ok_turnover
@@ -715,53 +756,53 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
 
     lines = []
     ok1, msg1 = _cond1_ma排列(i, ma5, ma10, ma20, ma60, close, ma5_slope, ma10_slope, ma20_slope)
-    lines.append(f"① {msg1} → {'✓' if ok1 else '✗'}")
+    lines.append(f"① {msg1} → {GREEN_CHECK if ok1 else RED_CROSS}")
 
     ok2a, msg2a = _cond2a_slope_atr(i, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr)
     ok2a_2, msg2a_2 = _cond2a_2_slope_atr(i, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr)
     ok2a_3, msg2a_3 = _cond2a_3_slope_atr(i, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr)
-    ok2b, msg2b = _cond2b_ma_daily(i, ma5_d, ma10_d, ma20_d)
-    ok2b_2, msg2b_2 = _cond2b_2_ma_daily(i, ma5_d, ma10_d, ma20_d)
-    ok2b_3, msg2b_3 = _cond2b_3_ma_daily(i, ma5_d, ma10_d, ma20_d)
+    ok2b, msg2b = _cond2b_ma_daily(i, ma5_d, ma10_d, ma20_d, close)
+    ok2b_2, msg2b_2 = _cond2b_2_ma_daily(i, ma5_d, ma10_d, ma20_d, close)
+    ok2b_3, msg2b_3 = _cond2b_3_ma_daily(i, ma5_d, ma10_d, ma20_d, close)
 
     if ok2a and ok2b:
-        lines.append(f"②-1_1 {msg2a} → {'✓' if ok2a else '✗'}")
-        lines.append(f"②-2_1 {msg2b} → {'✓' if ok2b else '✗'}")
+        lines.append(f"②-1_1 {msg2a} → {GREEN_CHECK if ok2a else RED_CROSS}")
+        lines.append(f"②-2_1 {msg2b} → {GREEN_CHECK if ok2b else RED_CROSS}")
     else:
         if ok2a_2 and ok2b_2:
-            lines.append(f"②-1_2 {msg2a_2} → {'✓' if ok2a_2 else '✗'}")
-            lines.append(f"②-2_2 {msg2b_2} → {'✓' if ok2b_2 else '✗'}")
+            lines.append(f"②-1_2 {msg2a_2} → {GREEN_CHECK if ok2a_2 else RED_CROSS}")
+            lines.append(f"②-2_2 {msg2b_2} → {GREEN_CHECK if ok2b_2 else RED_CROSS}")
         else:
             if ok2a_3 and ok2b_3:
-                lines.append(f"②-1_3 {msg2a_3} → {'✓' if ok2a_3 else '✗'}")
-                lines.append(f"②-2_3 {msg2b_3} → {'✓' if ok2b_3 else '✗'}")
+                lines.append(f"②-1_3 {msg2a_3} → {GREEN_CHECK if ok2a_3 else RED_CROSS}")
+                lines.append(f"②-2_3 {msg2b_3} → {GREEN_CHECK if ok2b_3 else RED_CROSS}")
             else:
-                lines.append(f"②-1_1 {msg2a} → {'✓' if ok2a else '✗'}")
-                lines.append(f"②-2_1 {msg2b} → {'✓' if ok2b else '✗'}")
-                lines.append(f"②-1_2 {msg2a_2} → {'✓' if ok2a_2 else '✗'}")
-                lines.append(f"②-2_2 {msg2b_2} → {'✓' if ok2b_2 else '✗'}")
-                lines.append(f"②-1_3 {msg2a_3} → {'✓' if ok2a_3 else '✗'}")
-                lines.append(f"②-2_3 {msg2b_3} → {'✓' if ok2b_3 else '✗'}")
+                lines.append(f"②-1_1 {msg2a} → {GREEN_CHECK if ok2a else RED_CROSS}")
+                lines.append(f"②-2_1 {msg2b} → {GREEN_CHECK if ok2b else RED_CROSS}")
+                lines.append(f"②-1_2 {msg2a_2} → {GREEN_CHECK if ok2a_2 else RED_CROSS}")
+                lines.append(f"②-2_2 {msg2b_2} → {GREEN_CHECK if ok2b_2 else RED_CROSS}")
+                lines.append(f"②-1_3 {msg2a_3} → {GREEN_CHECK if ok2a_3 else RED_CROSS}")
+                lines.append(f"②-2_3 {msg2b_3} → {GREEN_CHECK if ok2b_3 else RED_CROSS}")
 
     ok3, msg3 = _cond3_mktcap(i, mc)
-    lines.append(f"③ {msg3} → {'✓' if ok3 else '✗'}")
+    lines.append(f"③ {msg3} → {GREEN_CHECK if ok3 else RED_CROSS}")
 
     ok4, msg4 = _cond4_turnover(i, turnover_avg, turnover_now, turnover_prev, gain_day, mc)
-    lines.append(f"④ {msg4} → {'✓' if ok4 else '✗'}")
+    lines.append(f"④ {msg4} → {GREEN_CHECK if ok4 else RED_CROSS}")
 
-    ok5, msg5 = _cond5_gain20(i, gain20, gain5)
-    lines.append(f"⑤ {msg5} → {'✓' if ok5 else '✗'}")
+    #ok5, msg5 = _cond5_gain20(i, gain20, gain5)
+    #lines.append(f"⑤ {msg5} → {GREEN_CHECK if ok5 else RED_CROSS}")
 
     ok6, msg6 = _cond6_gain_day(i, gain_day)
-    lines.append(f"⑥ {msg6} → {'✓' if ok6 else '✗'}")
+    lines.append(f"⑥ {msg6} → {GREEN_CHECK if ok6 else RED_CROSS}")
 
     ok7, msg7 = _cond7_close_near_high(i, close, recent_20_high)
-    lines.append(f"⑦ {msg7} → {'✓' if ok7 else '✗'}")
+    lines.append(f"⑦ {msg7} → {GREEN_CHECK if ok7 else RED_CROSS}")
 
     #ok8, msg8 = _cond8_gain5(i, gain5)
-    #lines.append(f"⑧ {msg8} → {'✓' if ok8 else '✗'}")
+    #lines.append(f"⑧ {msg8} → {GREEN_CHECK if ok8 else RED_CROSS}")
 
-    lines.append(f"\n  最终：{'✓ 通过全部条件' if (ok1 and ((ok2a and ok2b) or (ok2a_2 and ok2b_2)) and ok3 and ok4 and ok5 and ok6 and ok7) else '✗ 淘汰'}")
+    lines.append(f"\n  最终：{'✓ 通过全部条件' if (ok1 and ((ok2a and ok2b) or (ok2a_2 and ok2b_2)) and ok3 and ok4 and ok6 and ok7) else '✗ 淘汰'}")
     return lines
 
 
@@ -837,8 +878,8 @@ def check_ma(df: pd.DataFrame,
     ma10_daily = (ma10[i] / ma10[i-1] - 1) * 100 if i >= 1 else -999
     ma20_daily = (ma20[i] / ma20[i-1] - 1) * 100 if i >= 1 else -999
     gain_day   = (close[i] / close[i-1] - 1) * 100.0
-    gain5      = (close[i] / close[i-5] - 1) * 100.0
-    gain20     = (close[i] / close[i-20] - 1) * 100.0 if i >= 20 else float('nan')
+    #gain5      = (close[i] / close[i-5] - 1) * 100.0
+    #gain20     = (close[i] / close[i-20] - 1) * 100.0 if i >= 20 else float('nan')
     turnover_avg = np.mean(turnover[i - TURNOVER_LEN + 1 : i + 1])
     turnover_now  = float(turnover[i])
     turnover_prev = float(turnover[i-1]) if i >= 1 else 0.0
@@ -857,9 +898,9 @@ def check_ma(df: pd.DataFrame,
         return None
 
     # ── 条件②-2 日变 ─────────────────────────────────────
-    ok2b, _ = _cond2b_ma_daily(i, ma5_daily, ma10_daily, ma20_daily)
-    ok2b_2, _ = _cond2b_2_ma_daily(i, ma5_daily, ma10_daily, ma20_daily)
-    ok2b_3, _ = _cond2b_3_ma_daily(i, ma5_daily, ma10_daily, ma20_daily)
+    ok2b, _ = _cond2b_ma_daily(i, ma5_daily, ma10_daily, ma20_daily, close)
+    ok2b_2, _ = _cond2b_2_ma_daily(i, ma5_daily, ma10_daily, ma20_daily, close)
+    ok2b_3, _ = _cond2b_3_ma_daily(i, ma5_daily, ma10_daily, ma20_daily, close)
     if not (ok2a and ok2b):
         if not (ok2a_2 and ok2b_2):
             if not (ok2a_3 and ok2b_3):
@@ -880,9 +921,9 @@ def check_ma(df: pd.DataFrame,
         return None
 
     # ── 条件⑤ 20日涨幅 ────────────────────────────────────
-    ok5, _ = _cond5_gain20(i, gain20, gain5)
-    if not ok5:
-        return None
+    #ok5, _ = _cond5_gain20(i, gain20, gain5)
+    #if not ok5:
+    #    return None
 
     # ── 条件⑥ 当日涨幅 ───────────────────────────────────
     ok6, _ = _cond6_gain_day(i, gain_day)
@@ -1207,7 +1248,7 @@ def print_detail(results: list):
             continue
 
         ok1 = r['ok1']
-        print(f"   ① MA5>{r['ma5']:.2f} > MA10>{r['ma10']:.2f} > MA20>{r['ma20']:.2f}  →  {'✓' if ok1 else '✗'}")
+        print(f"   ① MA5>{r['ma5']:.2f} > MA10>{r['ma10']:.2f} > MA20>{r['ma20']:.2f}  →  {GREEN_CHECK if ok1 else RED_CROSS}")
 
         ok2a = r['ok2a']
         ok2b = r['ok2b']
@@ -1217,19 +1258,19 @@ def print_detail(results: list):
         ok2b_3 = r['ok2b_3']
 
         if ok2a and ok2b:
-            print(f"   ②-1_1 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f})  →  {'✓' if ok2a else '✗'}")
+            print(f"   ②-1_1 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f})  →  {GREEN_CHECK if ok2a else RED_CROSS}")
             print(f"   ②-2_1 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY:.3f}%")
         if ok2a_2 and ok2b_2:
-            print(f"   ②-1_2 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR2:.3f},{SLOPE_MA5_ATR_MAX2:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR2:.3f},{SLOPE_MA10_ATR_MAX2:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR2:.3f},{SLOPE_MA20_ATR_MAX2:.3f})  →  {'✓' if ok2a_2 else '✗'}")
+            print(f"   ②-1_2 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR2:.3f},{SLOPE_MA5_ATR_MAX2:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR2:.3f},{SLOPE_MA10_ATR_MAX2:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR2:.3f},{SLOPE_MA20_ATR_MAX2:.3f})  →  {GREEN_CHECK if ok2a_2 else RED_CROSS}")
             print(f"   ②-2_2 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY2:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY2:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY2:.3f}%")
         if ok2a_3 and ok2b_3:
-            print(f"   ②-1_3 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR3:.3f},{SLOPE_MA5_ATR_MAX3:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR3:.3f},{SLOPE_MA10_ATR_MAX3:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR3:.3f},{SLOPE_MA20_ATR_MAX3:.3f})  →  {'✓' if ok2a_3 else '✗'}")
+            print(f"   ②-1_3 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR3:.3f},{SLOPE_MA5_ATR_MAX3:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR3:.3f},{SLOPE_MA10_ATR_MAX3:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR3:.3f},{SLOPE_MA20_ATR_MAX3:.3f})  →  {GREEN_CHECK if ok2a_3 else RED_CROSS}")
             print(f"   ②-2_3 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY3:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY3:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY3:.3f}%")
         mc_d = r.get('mktcap', 0)
         thr_d = get_turnover_min(mc_d)
-        print(f"   ④ 近5日均换手率 {r['turnover_avg']:.2f}% (需≥{thr_d:.1f}%，市值{mc_d:.0f}亿)  →  {'✓' if r['turnover_avg'] >= thr_d else '✗'}")
-        print(f"   ⑤ 20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN}%~{GAIN20_MAX}%)  →  {'✓' if GAIN20_MAX>=r['gain20']>=GAIN20_MIN else '✗'}")
-        print(f"   ⑧ 5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN}%~{GAIN5_MAX}%)  →  {'✓' if GAIN5_MAX>=r['gain5']>=GAIN5_MIN else '✗'}")
+        print(f"   ④ 近5日均换手率 {r['turnover_avg']:.2f}% (需≥{thr_d:.1f}%，市值{mc_d:.0f}亿)  →  {GREEN_CHECK if r['turnover_avg'] >= thr_d else RED_CROSS}")
+        print(f"   ⑤ 20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN}%~{GAIN20_MAX}%)  →  {GREEN_CHECK if GAIN20_MAX>=r['gain20']>=GAIN20_MIN else RED_CROSS}")
+        print(f"   ⑧ 5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN}%~{GAIN5_MAX}%)  →  {GREEN_CHECK if GAIN5_MAX>=r['gain5']>=GAIN5_MIN else RED_CROSS}")
         print(f"   MA5近5日变化 {r['ma5_chg5d']:+.2f}%  MA10近5日 {r['ma10_chg5d']:+.2f}%  MA20近5日 {r['ma20_chg5d']:+.2f}%")
         print(f"   均线发散度 {r['spread']:.2f}%")
         print()
