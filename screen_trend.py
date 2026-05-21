@@ -384,6 +384,7 @@ def _cond2b_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
     """②-2 MA5/MA10/MA20 日变 >= 阈值（均线向上推，目标股多为缓涨/横走）"""
     ok = ma5_daily >= MA5_DAILY and ma10_daily >= MA10_DAILY and ma20_daily >= MA20_DAILY
 
+    # ── 条件⑤ 5日 20日涨幅 ────────────────────────────────────
     gain5    = (close[idx]/close[idx-5]-1)*100 if idx>=5 else float('nan')
     gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
     ok5 = GAIN5_MIN <= gain5 <= GAIN5_MAX
@@ -402,6 +403,7 @@ def _cond2b_2_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
     """②-2 MA5/MA10/MA20 日变 >= 阈值（主升浪、短线强势股）"""
     ok = ma5_daily >= MA5_DAILY2 and ma10_daily >= MA10_DAILY2 and ma20_daily >= MA20_DAILY2
 
+    # ── 条件⑤ 5日 20日涨幅 ────────────────────────────────────
     gain5    = (close[idx]/close[idx-5]-1)*100 if idx>=5 else float('nan')
     gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
     ok5 = GAIN5_MIN2 <= gain5 <= GAIN5_MAX2
@@ -419,6 +421,8 @@ def _cond2b_2_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
 def _cond2b_3_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
     """②-3 MA5/MA10/MA20 日变 >= 阈值（中期趋势延续但短期休整/平台蓄势股）"""
     ok = ma5_daily >= MA5_DAILY3 and ma10_daily >= MA10_DAILY3 and ma20_daily >= MA20_DAILY3
+
+    # ── 条件⑤ 5日 20日涨幅 ────────────────────────────────────
     gain5    = (close[idx]/close[idx-5]-1)*100 if idx>=5 else float('nan')
     gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
     ok5 = GAIN5_MIN3 <= gain5 <= GAIN5_MAX3
@@ -455,16 +459,6 @@ def _cond4_turnover(idx, turnover_avg, turnover_now, turnover_prev, gain_day, mk
                 return False, f"近5日均换手{turnover_avg:.2f}% < {turn_thresh:.1f}%，不满足豁免条件"
     return True, f"近5日均换手{turnover_avg:.2f}% ≥ {turn_thresh:.1f}%（市值{mktcap:.0f}亿）"
 
-def _cond5_gain20(idx, gain20, gain5):
-    """⑤ 5日涨幅不过热 20日涨幅在合理区间"""
-    """ 检查第一套参数 """
-    ok5_1 = GAIN5_MIN <= gain5 <= GAIN5_MAX
-    ok20_1 = GAIN20_MIN <= gain20 <= GAIN20_MAX
-    if ok5_1 and ok20_1:
-        return True, f"5日涨幅{gain5:+.1f}% ∈ [{GAIN5_MIN},{GAIN5_MAX}]% 20日涨幅{gain20:+.1f}% ∈ [{GAIN20_MIN},{GAIN20_MAX}]%"
-
-    return False, f"5日涨幅{gain5:+.1f}% ∈ [{GAIN5_MIN},{GAIN5_MAX}]% 20日涨幅{gain20:+.1f}% ∈ [{GAIN20_MIN},{GAIN20_MAX}]%"
-
 def _cond6_gain_day(idx, gain_day):
     """⑥ 当日涨幅在合理区间"""
     ok = GAIN_DAY_MIN <= gain_day <= GAIN_DAY_MAX
@@ -479,13 +473,6 @@ def _cond7_close_near_high(idx, close, recent_20_high):
     if not ok:
         return False, f"收盘{close[idx]:.2f} < 20日最高{recent_20_high:.2f}×{CLOSE_NEAR_HIGH_RATIO}={thresh:.2f}"
     return True, f"收盘{close[idx]:.2f} ≥ 20日最高×{CLOSE_NEAR_HIGH_RATIO}={thresh:.2f}"
-
-def _cond8_gain5(idx, gain5):
-    """⑧ 5日涨幅不过热"""
-    ok = GAIN5_MIN <= gain5 <= GAIN5_MAX
-    if not ok:
-        return False, f"5日涨幅{gain5:+.1f}% 不在[{GAIN5_MIN},{GAIN5_MAX}]%"
-    return True, f"5日涨幅{gain5:+.1f}% ∈ [{GAIN5_MIN},{GAIN5_MAX}]%"
 
 # ── 共用工具：3点线性回归斜率（归一化）──
 def _lr_slope(arr, idx):
@@ -790,17 +777,11 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
     ok4, msg4 = _cond4_turnover(i, turnover_avg, turnover_now, turnover_prev, gain_day, mc)
     lines.append(f"④ {msg4} → {GREEN_CHECK if ok4 else RED_CROSS}")
 
-    #ok5, msg5 = _cond5_gain20(i, gain20, gain5)
-    #lines.append(f"⑤ {msg5} → {GREEN_CHECK if ok5 else RED_CROSS}")
-
     ok6, msg6 = _cond6_gain_day(i, gain_day)
-    lines.append(f"⑥ {msg6} → {GREEN_CHECK if ok6 else RED_CROSS}")
+    lines.append(f"⑤ {msg6} → {GREEN_CHECK if ok6 else RED_CROSS}")
 
     ok7, msg7 = _cond7_close_near_high(i, close, recent_20_high)
-    lines.append(f"⑦ {msg7} → {GREEN_CHECK if ok7 else RED_CROSS}")
-
-    #ok8, msg8 = _cond8_gain5(i, gain5)
-    #lines.append(f"⑧ {msg8} → {GREEN_CHECK if ok8 else RED_CROSS}")
+    lines.append(f"⑥ {msg7} → {GREEN_CHECK if ok7 else RED_CROSS}")
 
     lines.append(f"\n  最终：{'✓ 通过全部条件' if (ok1 and ((ok2a and ok2b) or (ok2a_2 and ok2b_2)) and ok3 and ok4 and ok6 and ok7) else '✗ 淘汰'}")
     return lines
@@ -878,8 +859,8 @@ def check_ma(df: pd.DataFrame,
     ma10_daily = (ma10[i] / ma10[i-1] - 1) * 100 if i >= 1 else -999
     ma20_daily = (ma20[i] / ma20[i-1] - 1) * 100 if i >= 1 else -999
     gain_day   = (close[i] / close[i-1] - 1) * 100.0
-    #gain5      = (close[i] / close[i-5] - 1) * 100.0
-    #gain20     = (close[i] / close[i-20] - 1) * 100.0 if i >= 20 else float('nan')
+    gain5      = (close[i] / close[i-5] - 1) * 100.0
+    gain20     = (close[i] / close[i-20] - 1) * 100.0 if i >= 20 else float('nan')
     turnover_avg = np.mean(turnover[i - TURNOVER_LEN + 1 : i + 1])
     turnover_now  = float(turnover[i])
     turnover_prev = float(turnover[i-1]) if i >= 1 else 0.0
@@ -898,6 +879,7 @@ def check_ma(df: pd.DataFrame,
         return None
 
     # ── 条件②-2 日变 ─────────────────────────────────────
+    # ── 条件⑤⑧ 5日 20日涨幅 ────────────────────────────────────
     ok2b, _ = _cond2b_ma_daily(i, ma5_daily, ma10_daily, ma20_daily, close)
     ok2b_2, _ = _cond2b_2_ma_daily(i, ma5_daily, ma10_daily, ma20_daily, close)
     ok2b_3, _ = _cond2b_3_ma_daily(i, ma5_daily, ma10_daily, ma20_daily, close)
@@ -920,24 +902,14 @@ def check_ma(df: pd.DataFrame,
     if not ok4:
         return None
 
-    # ── 条件⑤ 20日涨幅 ────────────────────────────────────
-    #ok5, _ = _cond5_gain20(i, gain20, gain5)
-    #if not ok5:
-    #    return None
-
-    # ── 条件⑥ 当日涨幅 ───────────────────────────────────
+    # ── 条件⑤ 当日涨幅 ───────────────────────────────────
     ok6, _ = _cond6_gain_day(i, gain_day)
     if not ok6:
         return None
 
-    # ── 条件⑦ 收盘近20日最高 ──────────────────────────────
+    # ── 条件⑥ 收盘近20日最高 ──────────────────────────────
     ok7, _ = _cond7_close_near_high(i, close, recent_20_high)
     if not ok7:
-        return None
-
-    # ── 条件⑧ 5日涨幅 ─────────────────────────────────────
-    ok8, _ = _cond8_gain5(i, gain5)
-    if not ok8:
         return None
 
     # ── 计算辅助指标（用于展示）──────────────
@@ -1200,14 +1172,19 @@ def banner():
 |     前2天涨幅<2%，ma5_slope<{LIMITUP_I2_SLOPE_MA5_U}%，ma5_daily<{LIMITUP_I2_DAILY_U}%
 +======================================================================+
 |  [1] MA5>MA10>MA20 且 MA5>MA60, MA10>MA60 (多头排列)
-|  [2-1] 均线斜率/ATR波动率 {SLOPE_MA5_ATR_MAX:.2f}>ma5_atr>={SLOPE_MA5_ATR:.2f} {SLOPE_MA10_ATR_MAX:.2f}>ma10_atr>={SLOPE_MA10_ATR:.2f} {SLOPE_MA20_ATR_MAX:.2f}>ma20_atr>={SLOPE_MA20_ATR:.2f}
-|  [2-2] MA5日变>={MA5_DAILY:.2f}% and MA10日变>={MA10_DAILY:.2f}% and MA20日变>={MA20_DAILY:.2f}%
+|  [2-1_1] 均线斜率/ATR波动率 {SLOPE_MA5_ATR_MAX:.2f}>ma5_atr>={SLOPE_MA5_ATR:.2f} {SLOPE_MA10_ATR_MAX:.2f}>ma10_atr>={SLOPE_MA10_ATR:.2f} {SLOPE_MA20_ATR_MAX:.2f}>ma20_atr>={SLOPE_MA20_ATR:.2f}
+|  [2-2_1] MA5日变>={MA5_DAILY:.2f}% and MA10日变>={MA10_DAILY:.2f}% and MA20日变>={MA20_DAILY:.2f}%
+|          5日涨幅 {GAIN5_MIN:.1f}%~{GAIN5_MAX:.1f}%  20日涨幅 {GAIN20_MIN:.1f}%~{GAIN20_MAX:.1f}%
+|  [2-1_2] 均线斜率/ATR波动率 {SLOPE_MA5_ATR_MAX2:.2f}>ma5_atr>={SLOPE_MA5_ATR2:.2f} {SLOPE_MA10_ATR_MAX2:.2f}>ma10_atr>={SLOPE_MA10_ATR2:.2f} {SLOPE_MA20_ATR_MAX2:.2f}>ma20_atr>={SLOPE_MA20_ATR2:.2f}
+|  [2-2_2] MA5日变>={MA5_DAILY2:.2f}% and MA10日变>={MA10_DAILY2:.2f}% and MA20日变>={MA20_DAILY2:.2f}%
+|          5日涨幅 {GAIN5_MIN2:.1f}%~{GAIN5_MAX2:.1f}%  20日涨幅 {GAIN20_MIN2:.1f}%~{GAIN20_MAX2:.1f}%
+|  [2-1_3] 均线斜率/ATR波动率 {SLOPE_MA5_ATR_MAX3:.2f}>ma5_atr>={SLOPE_MA5_ATR3:.2f} {SLOPE_MA10_ATR_MAX3:.2f}>ma10_atr>={SLOPE_MA10_ATR3:.2f} {SLOPE_MA20_ATR_MAX3:.2f}>ma20_atr>={SLOPE_MA20_ATR3:.2f}
+|  [2-2_3] MA5日变>={MA5_DAILY3:.2f}% and MA10日变>={MA10_DAILY3:.2f}% and MA20日变>={MA20_DAILY3:.2f}%
+|          5日涨幅 {GAIN5_MIN3:.1f}%~{GAIN5_MAX3:.1f}%  20日涨幅 {GAIN20_MIN3:.1f}%~{GAIN20_MAX3:.1f}%
 |  [3] 流通市值 >= {MKT_CAP_MIN:.0f}亿
 |  [4] 近5日平均换手率 >= 自适应（幂律，市值越大要求越低）或 当日涨幅>=3% 并且 当日换手率 >= {TURN_BASE:.1f}% 并且量比前一天放大
-|  [5] 20日涨幅 {GAIN20_MIN:.1f}%~{GAIN20_MAX:.1f}%
-|  [6] 当日涨幅 {GAIN_DAY_MIN:.1f}%~{GAIN_DAY_MAX:.1f}%
-|  [7] 收盘 ≥ 20日最高 × {CLOSE_NEAR_HIGH_RATIO}
-|  [8] 5日涨幅 {GAIN5_MIN:.1f}%~{GAIN5_MAX:.1f}%
+|  [5] 当日涨幅 {GAIN_DAY_MIN:.1f}%~{GAIN_DAY_MAX:.1f}%
+|  [6] 收盘 ≥ 20日最高 × {CLOSE_NEAR_HIGH_RATIO}
 +======================================================================+""")
 
 def print_results(results, signal_date=None, weekday_cn=None):
@@ -1219,11 +1196,11 @@ def print_results(results, signal_date=None, weekday_cn=None):
     print(f"\n{sep}")
     print(f"  信号日: {date_label}  找到 {len(results)} 只")
     print(sep)
-    print("%3s  %-8s  %-8s  %-10s  %-5s  %-6s  %-5s  %-5s %-5s  %-7s %-7s %-7s %-6s" % ("#","代码","名称","日期","收盘","20日涨","均换手","换手今","量比", "MA5/ATR", "MA10/ATR", "MA20/ATR", "市值(亿)"))
+    print("%3s  %-8s  %-8s  %-10s  %-5s  %-6s  %-5s  %-5s %-5s %-7s %-7s %-7s %-6s" % ("#","代码","名称","日期","收盘","20日涨","均换手","换手今","量比", "MA5/ATR", "MA10/ATR", "MA20/ATR", "市值(亿)"))
     print("-" * 120)
     for rank, r in enumerate(results, 1):
         tag = " 🔴特殊" if r.get("_limitup") else ""
-        print("%3d  %-8s  %-8s  %-10s  %7.2f  %+7.1f%%  %7.2f%%  %6.2f%%  %5.2fx  %5.2f  %5.2f  %5.2f  %5.0f%s" % (
+        print("%3d  %-8s  %-8s  %-10s  %7.2f  %+7.1f%%  %7.2f%%  %6.2f%%  %5.2fx   %5.2f    %5.2f    %5.2f  %5.0f%s" % (
             rank, r["code"], r["name"], r["date"], r["close"],
             r["gain20"], r["turnover_avg"], r["turnover_today"], r["vol_ratio"], r["ma5_slope_atr"], r["ma10_slope_atr"], r["ma20_slope_atr"], r["mktcap"], tag))
     print()
@@ -1259,18 +1236,22 @@ def print_detail(results: list):
 
         if ok2a and ok2b:
             print(f"   ②-1_1 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f})  →  {GREEN_CHECK if ok2a else RED_CROSS}")
-            print(f"   ②-2_1 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY:.3f}%")
+            print(f"   ②-2_1 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY:.3f}%  →  {GREEN_CHECK if ok2b else RED_CROSS}")
+            print(f"         5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN}%~{GAIN5_MAX}%)  →  {GREEN_CHECK if GAIN5_MAX>=r['gain5']>=GAIN5_MIN else RED_CROSS}")
+            print(f"         20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN}%~{GAIN20_MAX}%)  →  {GREEN_CHECK if GAIN20_MAX>=r['gain20']>=GAIN20_MIN else RED_CROSS}")
         if ok2a_2 and ok2b_2:
             print(f"   ②-1_2 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR2:.3f},{SLOPE_MA5_ATR_MAX2:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR2:.3f},{SLOPE_MA10_ATR_MAX2:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR2:.3f},{SLOPE_MA20_ATR_MAX2:.3f})  →  {GREEN_CHECK if ok2a_2 else RED_CROSS}")
-            print(f"   ②-2_2 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY2:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY2:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY2:.3f}%")
+            print(f"   ②-2_2 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY2:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY2:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY2:.3f}%  →  {GREEN_CHECK if ok2b_2 else RED_CROSS}")
+            print(f"         5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN2}%~{GAIN5_MAX2}%)  →  {GREEN_CHECK if GAIN5_MAX2>=r['gain5']>=GAIN5_MIN2 else RED_CROSS}")
+            print(f"         20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN2}%~{GAIN20_MAX2}%)  →  {GREEN_CHECK if GAIN20_MAX2>=r['gain20']>=GAIN20_MIN2 else RED_CROSS}")
         if ok2a_3 and ok2b_3:
             print(f"   ②-1_3 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR3:.3f},{SLOPE_MA5_ATR_MAX3:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR3:.3f},{SLOPE_MA10_ATR_MAX3:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR3:.3f},{SLOPE_MA20_ATR_MAX3:.3f})  →  {GREEN_CHECK if ok2a_3 else RED_CROSS}")
-            print(f"   ②-2_3 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY3:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY3:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY3:.3f}%")
+            print(f"   ②-2_3 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY3:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY3:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY3:.3f}%  →  {GREEN_CHECK if ok2b_3 else RED_CROSS}")
+            print(f"         5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN3}%~{GAIN5_MAX3}%)  →  {GREEN_CHECK if GAIN5_MAX3>=r['gain5']>=GAIN5_MIN3 else RED_CROSS}")
+            print(f"         20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN3}%~{GAIN20_MAX3}%)  →  {GREEN_CHECK if GAIN20_MAX3>=r['gain20']>=GAIN20_MIN3 else RED_CROSS}")
         mc_d = r.get('mktcap', 0)
         thr_d = get_turnover_min(mc_d)
-        print(f"   ④ 近5日均换手率 {r['turnover_avg']:.2f}% (需≥{thr_d:.1f}%，市值{mc_d:.0f}亿)  →  {GREEN_CHECK if r['turnover_avg'] >= thr_d else RED_CROSS}")
-        print(f"   ⑤ 20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN}%~{GAIN20_MAX}%)  →  {GREEN_CHECK if GAIN20_MAX>=r['gain20']>=GAIN20_MIN else RED_CROSS}")
-        print(f"   ⑧ 5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN}%~{GAIN5_MAX}%)  →  {GREEN_CHECK if GAIN5_MAX>=r['gain5']>=GAIN5_MIN else RED_CROSS}")
+        print(f"   ③ 近5日均换手率 {r['turnover_avg']:.2f}% (需≥{thr_d:.1f}%，市值{mc_d:.0f}亿)  →  {GREEN_CHECK if r['turnover_avg'] >= thr_d else RED_CROSS}")
         print(f"   MA5近5日变化 {r['ma5_chg5d']:+.2f}%  MA10近5日 {r['ma10_chg5d']:+.2f}%  MA20近5日 {r['ma20_chg5d']:+.2f}%")
         print(f"   均线发散度 {r['spread']:.2f}%")
         print()
@@ -1285,12 +1266,12 @@ def main():
         description=f"条件选股器（同时满足以下全部条件）\n\n"
                     f"条件①：MA5>MA10>MA20 且 MA5>MA60, MA10>MA60（多头排列，均线在MA60上方）\n"
                     f"条件②：均线斜率/ATR波动率 + MA日变>{MA5_DAILY}%\n"
+                    f"条件：   5日涨幅 {GAIN5_MIN:.0f}%~{GAIN5_MAX:.0f}%\n"
+                    f"条件：   20日涨幅 {int(GAIN20_MIN)}%~{int(GAIN20_MAX)}%\n"
                     f"条件③：流通市值 >= {int(MKT_CAP_MIN)}亿\n"
                     f"条件④：近5日平均换手率 ≥ 自适应换手率（幂律，市值200亿→4%）\n"
-                    f"条件⑤：20日涨幅 {int(GAIN20_MIN)}%~{int(GAIN20_MAX)}%\n"
-                    f"条件⑥：当日涨幅 {int(GAIN_DAY_MIN)}%~{int(GAIN_DAY_MAX)}%\n"
-                    f"条件⑦：收盘 ≥ 20日最高 × {CLOSE_NEAR_HIGH_RATIO}\n"
-                    f"条件⑧：5日涨幅 {GAIN5_MIN:.0f}%~{GAIN5_MAX:.0f}%",
+                    f"条件⑤：当日涨幅 {int(GAIN_DAY_MIN)}%~{int(GAIN_DAY_MAX)}%\n"
+                    f"条件⑥：收盘 ≥ 20日最高 × {CLOSE_NEAR_HIGH_RATIO}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--top",          type=int,   default=300,      help="显示前N只（默认300）")
@@ -1299,6 +1280,8 @@ def main():
     parser.add_argument("--code",        type=str,   default=None,   help="单票分析")
     parser.add_argument("--qfq",         action="store_true", help="使用前复权数据（默认使用原始不复权数据）")
     parser.add_argument("--blk",         type=str, nargs='?',    const="/mnt/d/new_tdx/T0002/blocknew/RMG.blk",  default=None,  help="通达信板块文件路径（7位代码，第一位为市场标识：0/2=深圳，1=上海）")
+    parser.add_argument("--start",       type=str, default=None, help="区间起始日（YYYY-MM-DD，配合--code单票模式使用）")
+    parser.add_argument("--end",         type=str, default=None, help="区间结束日（YYYY-MM-DD，配合--code单票模式使用）")
     args = parser.parse_args()
 
     tag = args.date or "latest"
@@ -1330,6 +1313,71 @@ def main():
     sys.__stdout__.flush()
 
     weekday_cn = get_weekday_cn(args.date) if args.date else None
+
+    # ── 单票区间扫描模式 ──
+    if args.code and args.start and args.end:
+        banner()
+        import pandas as pd
+        sys.__stdout__.write(f"=== 区间扫描: {args.code}  {args.start} ~ {args.end} ===\n")
+        sys.__stdout__.flush()
+        df = load_history(args.code, end_date=args.end, data_mode=args.qfq and "qfq" or "raw")
+        if df is None or df.empty:
+            sys.__stdout__.write(f"无法加载 {args.code} 数据\n")
+            sys.__stdout__.flush()
+            return
+        df["date"] = pd.to_datetime(df["date"])
+        df_sorted = df.sort_values("date").reset_index(drop=True)
+        start_dt = pd.to_datetime(args.start)
+        end_dt   = pd.to_datetime(args.end)
+        mask = (df_sorted["date"] >= start_dt) & (df_sorted["date"] <= end_dt)
+        range_dates = df_sorted.loc[mask, "date"].tolist()
+        if not range_dates:
+            sys.__stdout__.write(f"区间 {args.start}~{args.end} 内无数据\n")
+            sys.__stdout__.flush()
+            return
+        sys.__stdout__.write(f"区间内共 {len(range_dates)} 个交易日\n\n")
+        sys.__stdout__.flush()
+        passed_list = []
+        for dt in range_dates:
+            sig = str(dt)[:10]
+            weekday = get_weekday_cn(sig)
+            reason_lim = _check_limitup_conditions(df_sorted, sig, args.code)
+            if reason_lim is not None and reason_lim:
+                sys.__stdout__.write(f"\n{'='*60}\n")
+                sys.__stdout__.write(f"【{sig} {weekday}】 ✓ 通过特殊通道\n")
+                sys.__stdout__.write(f"{'='*60}\n")
+                for line in reason_lim:
+                    sys.__stdout__.write("  " + line + "\n")
+                sys.__stdout__.flush()
+                passed_list.append(sig)
+                continue
+            reason = _check_ma_conditions(df_sorted, sig)
+            passed = any("通过全部条件" in line and "✓" in line for line in reason)
+            if passed:
+                sys.__stdout__.write(f"\n{'='*60}\n")
+                sys.__stdout__.write(f"【{sig} {weekday}】 ✓ 通过正常通道\n")
+                sys.__stdout__.write(f"{'='*60}\n")
+                for line in reason:
+                    sys.__stdout__.write("  " + line + "\n")
+                sys.__stdout__.flush()
+                passed_list.append(sig)
+            else:
+                last_fail = [line for line in reason if RED_CROSS in line]
+                fail_line = last_fail[-1] if last_fail else reason[-1]
+                sys.__stdout__.write(f"  [{sig} {weekday}] ✗  {fail_line.strip()}\n")
+                sys.__stdout__.flush()
+        sys.__stdout__.write(f"\n{'='*60}\n")
+        sys.__stdout__.write(f"区间 {args.start}~{args.end} 扫描完毕：\n")
+        sys.__stdout__.write(f"  通过 {len(passed_list)} 个交易日\n")
+        if passed_list:
+            sys.__stdout__.write(f"  通过日期：{', '.join(passed_list)}\n")
+        sys.__stdout__.write("\n")
+        sys.__stdout__.flush()
+        sys.stdout.flush()
+        sys.stdout = _orig
+        sys.__stdout__.write("\n结果已写入: %s\n" % out_path)
+        sys.__stdout__.flush()
+        return
 
     if args.code:
         # ── 单票模式：输出逐级条件核对 ──
