@@ -107,20 +107,34 @@ def preload(signal_date=None, data_mode="raw"):
             df["_ma60"] = rolling_mean(close, 60)
             df["_atr_pct"] = calc_atr_percent(df, 14)
 
+            n = len(df)
+            ma5_vals  = df["_ma5"].values.astype(float)
+            ma10_vals = df["_ma10"].values.astype(float)
+            ma20_vals = df["_ma20"].values.astype(float)
+            atr_vals  = df["_atr_pct"].values.astype(float)
 
-            i_last = len(df) - 1
-            df["_ma5_slope"] = _lr_slope(df["_ma5"].values, i_last)
-            df["_ma10_slope"] = _lr_slope(df["_ma10"].values, i_last)
-            df["_ma20_slope"] = _lr_slope(df["_ma20"].values, i_last)
+            ma5_slope  = np.array([_lr_slope(ma5_vals,  idx) for idx in range(n)])
+            ma10_slope = np.array([_lr_slope(ma10_vals, idx) for idx in range(n)])
+            ma20_slope = np.array([_lr_slope(ma20_vals, idx) for idx in range(n)])
 
-            ma5_slope = df["_ma5_slope"].values
-            ma10_slope = df["_ma10_slope"].values
-            ma20_slope = df["_ma20_slope"].values
-            atr_arr = df["_atr_pct"].values
+            df["_ma5_slope"] = ma5_slope
+            df["_ma10_slope"] = ma10_slope
+            df["_ma20_slope"] = ma20_slope
 
-            df["_ma5_slope_atr"] = ma5_slope / (atr_arr[i_last] + 1e-12)
-            df["_ma10_slope_atr"] = ma10_slope / (atr_arr[i_last] + 1e-12)
-            df["_ma20_slope_atr"] = ma20_slope / (atr_arr[i_last] + 1e-12)
+            # 为每个位置计算斜率，并除以对应位置的ATR
+            #ma5_slope_atr  = np.array([_lr_slope(ma5_vals,  idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
+            #ma10_slope_atr = np.array([_lr_slope(ma10_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
+            #ma20_slope_atr = np.array([_lr_slope(ma20_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
+
+            # 直接复用斜率数组，避免重复计算
+            ma5_slope_atr  = ma5_slope / (atr_vals + 1e-12)
+            ma10_slope_atr = ma10_slope / (atr_vals + 1e-12)
+            ma20_slope_atr = ma20_slope / (atr_vals + 1e-12)
+
+            # 可选：存回DataFrame
+            df["_ma5_slope_atr"]  = ma5_slope_atr
+            df["_ma10_slope_atr"] = ma10_slope_atr
+            df["_ma20_slope_atr"] = ma20_slope_atr
 
             _price[key] = df
             loaded += 1
