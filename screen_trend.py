@@ -195,11 +195,12 @@ VOL_RATIO5_MAX = 1.10   # 近5日均量比（当日/前5日均）：超过此值
 
 # -- 第一套参数 慢牛、稳健成长股 --date 2026-05-06   --code 301013
 #GAIN20_MIN    = 20.0  # 下调：目标股20日涨幅多在7~12%
-GAIN20_MIN    = 18.0  # 下调：目标股20日涨幅多在7~12%
+#GAIN20_MIN    = 18.0  # 下调：目标股20日涨幅多在7~12%
+GAIN20_MIN    = 14.0  # 下调：目标股20日涨幅多在7~12%
 GAIN20_MAX    = 38.0  # 目标股20日涨幅可达60%
 #GAIN5_MIN     = 5  # 目标股5日涨幅多在2~25%）
 GAIN5_MIN     = 3.5  # 目标股5日涨幅多在2~25%）
-GAIN5_MAX     = 13.0   # 目标股5日涨幅可达53%
+GAIN5_MAX     = 13.8   # 目标股5日涨幅可达53%
 
 # 日变
 #MA5_DAILY  = 1.12
@@ -211,7 +212,7 @@ MA20_DAILY = 0.65
 #SLOPE_MA5_ATR     = 0.170  # 下限
 SLOPE_MA5_ATR     = 0.130  # 下限
 SLOPE_MA10_ATR    = 0.050  # 下限
-SLOPE_MA20_ATR    = 0.130  # 下限
+SLOPE_MA20_ATR    = 0.124  # 下限
 
 SLOPE_MA5_ATR_MAX     = 0.390   # 上限
 SLOPE_MA10_ATR_MAX    = 0.300   # 上限
@@ -264,18 +265,20 @@ SLOPE_MA20_ATR_MAX3    = 0.350   # 上限
 # 信号日(i)涨停：close(i)为20日最高，且满足均线多头+MA5斜率加速
 LIMITUP_I_SLOPE_MA5   = 0.2   # ma5_slope
 LIMITUP_I_DAILY_MA5   = 1.0   # ma5_daily  > 1.0%
-LIMITUP_I_SLOPE_MA10   = 0.25   # ma10_slope
+#LIMITUP_I_SLOPE_MA10   = 0.25   # ma10_slope
+LIMITUP_I_SLOPE_MA10   = 0.45   # ma10_slope
 LIMITUP_I_SLOPE_MA20   = 0.23   # ma20_slope
 LIMITUP_I_DAILY_MA10   = 0.5   # ma5_daily  < 0.5%
 LIMITUP_I_VOLUME       = 1.2   # 量比放大 1.2
 # 前1天(i-1)：涨幅<6%，ma5_slope在0~0.7%，ma5_daily在0~0.5%
-LIMITUP_I1_SLOPE_MA5_U = 0.15   # ma5_slope
-LIMITUP_I1_DAILY_U     = 1.0   # ma5_daily  < 1.0%
+#LIMITUP_I1_SLOPE_MA5_U = 0.15   # ma5_slope
+LIMITUP_I1_SLOPE_MA5_U = 0.23   # ma5_slope
+LIMITUP_I1_DAILY_U     = 1.5   # ma5_daily  < 1.0%
 # 前2天(i-2)：涨幅<2%，ma5_slope<0.3%，ma5_daily<0.2%
-LIMITUP_I2_SLOPE_MA5_U = 0.10   # ma5_slope
+LIMITUP_I2_SLOPE_MA5_U = 0.18   # ma5_slope
 LIMITUP_I2_DAILY_U     = 1.0   # ma5_daily  < 1.0%
 
-LIMITUP_GAIN_DAY_MAX  = 2.5   #
+LIMITUP_GAIN_DAY_MAX  = 3.0   #
 
 """
 ============================================================
@@ -537,6 +540,9 @@ def _cond_lim_i1(idx, close, ma5_slope_atr, ma5_daily_i1, ma5):
     """特殊通道 i-1 日：涨幅<6% 且 MA5斜率/ATR<阈值 且 MA5日变<阈值（蓄势）"""
     gain_i1 = abs(close[idx - 1] / ma5[idx - 1] - 1) * 100
     ok_gain  = gain_i1 < LIMITUP_GAIN_DAY_MAX
+    if not ok_gain:
+        gain_i1 = (close[idx - 1] / close[idx - 2] - 1) * 100
+        ok_gain  = gain_i1 < LIMITUP_GAIN_DAY_MAX
     ok_slope = LIMITUP_I1_SLOPE_MA5_U > ma5_slope_atr[idx - 1]
     ok_daily = LIMITUP_I1_DAILY_U > ma5_daily_i1
     return ok_gain, ok_slope, ok_daily, gain_i1
@@ -545,6 +551,9 @@ def _cond_lim_i2(idx, close, ma5_slope_atr, ma5_daily_i2, ma5):
     """特殊通道 i-2 日：涨幅<2% 且 MA5斜率/ATR<阈值 且 MA5日变<阈值（缩量整理）"""
     gain_i2 = (close[idx - 2] / ma5[idx - 2] - 1) * 100
     ok_gain  = gain_i2 < LIMITUP_GAIN_DAY_MAX
+    if not ok_gain:
+        gain_i2 = (close[idx - 2] / close[idx - 3] - 1) * 100
+        ok_gain  = gain_i2 < LIMITUP_GAIN_DAY_MAX
     ok_slope = ma5_slope_atr[idx - 2] < LIMITUP_I2_SLOPE_MA5_U
     ok_daily = ma5_daily_i2 < LIMITUP_I2_DAILY_U
     return ok_gain, ok_slope, ok_daily, gain_i2
@@ -590,7 +599,6 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
     lines.append(f"【特殊通道 — 信号日 {str(df.iloc[i]['date'])[:10]}】")
 
     # ── 涨停判断 ──
-    prev_close_i = close[i - 1]
     code_check = (code or "").lower()
     if code_check.startswith(("sz300", "sh688", "300", "688")):
         limit_ratio = 0.20
@@ -609,30 +617,16 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
     ok_all = _cond_lim_均线多头(i, ma5, ma10, ma20, ma60, close)
     lines.append(f"  ② close>{ma5[i]:.2f}>{ma10[i]:.2f}>{ma20[i]:.2f} 且 >{ma60[i]:.2f} → {GREEN_CHECK if ok_all else RED_CROSS}")
 
-
-    # ── 均线多头 ──
-    ok1 = close[i] > ma5[i] and close[i] > ma10[i] and close[i] > ma20[i] and close[i] > ma60[i]
-    ok2 = ma5[i] > (ma10[i] * 0.99)
-    ok3 = ma5[i] > (ma20[i] * 0.99)
-    ok_all = ok1 and ok2 and ok3
-    lines.append(f"  ② close>{ma5[i]:.2f}>{ma10[i]:.2f}>{ma20[i]:.2f} 且 >{ma60[i]:.2f} → {GREEN_CHECK if ok_all else RED_CROSS}")
-
     # ── ATR ──
     has_pre_atr = "_atr_pct" in df.columns
     atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
     if np.isnan(atr_pct[i]) or atr_pct[i] < 0.1:
-        return ["ATR数据异常"]
+        return None
 
-    # ── MA斜率 ──
-    has_pre_slope = "_ma5_slope_atr" in df.columns
-    if has_pre_slope:
-        ma5_slope_atr  = df["_ma5_slope_atr"].values.astype(float)
-        ma10_slope_atr = df["_ma10_slope_atr"].values.astype(float)
-        ma20_slope_atr = df["_ma20_slope_atr"].values.astype(float)
-    else:
-        ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
-        ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
-        ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    # ── MA斜率（实时算每个索引，保证准确性）─────
+    ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
 
     ma5_daily_i   = (ma5[i] / ma5[i - 1] - 1) * 100 if i >= 1 else -999
     ok_ma5_slope, ok_ma5_daily = _cond_lim_ma5_accel(i, ma5_slope_atr, ma5_daily_i)
@@ -1006,19 +1000,12 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
     if np.isnan(ma5[i]) or np.isnan(ma10[i]) or np.isnan(ma20[i]) or np.isnan(ma60[i]):
         return None
 
-    # ── 斜率（优先用预计算值）─────
-    has_pre_slope = "_ma5_slope_atr" in df.columns
-    if has_pre_slope:
-        ma5_slope_atr  = df["_ma5_slope_atr"].values.astype(float)
-        ma10_slope_atr = df["_ma10_slope_atr"].values.astype(float)
-        ma20_slope_atr = df["_ma20_slope_atr"].values.astype(float)
-    else:
-        # 实时算（只算信号日这一天的）
-        has_pre_atr = "_atr_pct" in df.columns
-        atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
-        ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
-        ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
-        ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    # ── 斜率（实时算每个索引，保证准确性）─────
+    has_pre_atr = "_atr_pct" in df.columns
+    atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
+    ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
 
     # ── i日 ──────────────────────────────────────────────
     # 根据代码前缀判断板块
@@ -1029,7 +1016,7 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
     else:
         limit_ratio = 0.10   # 主板 / 北交所
 
-    is_limitup, _ = _cond_lim_涨停(i, close, limit_ratio)
+    is_limitup, limit_up_price = _cond_lim_涨停(i, close, limit_ratio)
     if not is_limitup:
         return None
 
@@ -1052,13 +1039,10 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
         return None
 
     # ── 量比：当日成交量 / 前一日成交量 >= LIMITUP_I_VOLUME ─────────────────────
-    vol_today = float(df["volume"].values[i])
-    vol_prev  = float(df["volume"].values[i-1]) if i >= 1 else 0.0
     if not _cond_lim_量比(i, df):
         return None
 
     # ── i-1日 ─────────────────────────────────────────────
-    gain_i1 = (close[i-1] / close[i-2] - 1) * 100
     ma5_daily_i1 = (ma5[i-1] / ma5[i-2] - 1) * 100 if i-1 >= 1 else -999
 
     ok_gain1, ok_slope1, ok_daily1, gain_i1 = _cond_lim_i1(i, close, ma5_slope_atr, ma5_daily_i1, ma5)
@@ -1066,7 +1050,6 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
         return None
 
     # ── i-2日 ─────────────────────────────────────────────
-    gain_i2 = (close[i-2] / close[i-3] - 1) * 100
     ma5_daily_i2 = (ma5[i-2] / ma5[i-3] - 1) * 100 if i-2 >= 1 else -999
 
     ok_gain2, ok_slope2, ok_daily2, gain_i2 = _cond_lim_i2(i, close, ma5_slope_atr, ma5_daily_i2, ma5)
@@ -1364,7 +1347,7 @@ def main():
                 sys.__stdout__.flush()
                 passed_list.append(sig)
             else:
-                last_fail = [line for line in reason if RED_CROSS in line]
+                last_fail = [line for line in reason if "✗" in line]
                 fail_line = last_fail[-1] if last_fail else reason[-1]
                 sys.__stdout__.write(f"  [{sig} {weekday}] ✗  {fail_line.strip()}\n")
                 sys.__stdout__.flush()
