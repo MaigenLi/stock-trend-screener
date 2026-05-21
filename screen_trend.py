@@ -100,41 +100,28 @@ def preload(signal_date=None, data_mode="raw"):
             if df.empty:
                 continue  # 切片后没数据就跳过
 
-            close = df["close"].values.astype(float)
-            df["_ma5"]  = rolling_mean(close, 5)
-            df["_ma10"] = rolling_mean(close, 10)
-            df["_ma20"] = rolling_mean(close, 20)
-            df["_ma60"] = rolling_mean(close, 60)
-            df["_atr_pct"] = calc_atr_percent(df, 14)
+            #close = df["close"].values.astype(float)
+            #df["_ma5"]  = rolling_mean(close, 5)
+            #df["_ma10"] = rolling_mean(close, 10)
+            #df["_ma20"] = rolling_mean(close, 20)
+            #df["_ma60"] = rolling_mean(close, 60)
+            #df["_atr_pct"] = calc_atr_percent(df, 14)
 
-            n = len(df)
-            ma5_vals  = df["_ma5"].values.astype(float)
-            ma10_vals = df["_ma10"].values.astype(float)
-            ma20_vals = df["_ma20"].values.astype(float)
-            atr_vals  = df["_atr_pct"].values.astype(float)
-
-            ma5_slope  = np.array([_lr_slope(ma5_vals,  idx) for idx in range(n)])
-            ma10_slope = np.array([_lr_slope(ma10_vals, idx) for idx in range(n)])
-            ma20_slope = np.array([_lr_slope(ma20_vals, idx) for idx in range(n)])
-
-            df["_ma5_slope"] = ma5_slope
-            df["_ma10_slope"] = ma10_slope
-            df["_ma20_slope"] = ma20_slope
+            #n = len(df)
+            #ma5_vals  = df["_ma5"].values.astype(float)
+            #ma10_vals = df["_ma10"].values.astype(float)
+            #ma20_vals = df["_ma20"].values.astype(float)
+            #atr_vals  = df["_atr_pct"].values.astype(float)
 
             # 为每个位置计算斜率，并除以对应位置的ATR
             #ma5_slope_atr  = np.array([_lr_slope(ma5_vals,  idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
             #ma10_slope_atr = np.array([_lr_slope(ma10_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
             #ma20_slope_atr = np.array([_lr_slope(ma20_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
 
-            # 直接复用斜率数组，避免重复计算
-            ma5_slope_atr  = ma5_slope / (atr_vals + 1e-12)
-            ma10_slope_atr = ma10_slope / (atr_vals + 1e-12)
-            ma20_slope_atr = ma20_slope / (atr_vals + 1e-12)
-
             # 可选：存回DataFrame
-            df["_ma5_slope_atr"]  = ma5_slope_atr
-            df["_ma10_slope_atr"] = ma10_slope_atr
-            df["_ma20_slope_atr"] = ma20_slope_atr
+            #df["_ma5_slope_atr"]  = ma5_slope_atr
+            #df["_ma10_slope_atr"] = ma10_slope_atr
+            #df["_ma20_slope_atr"] = ma20_slope_atr
 
             _price[key] = df
             loaded += 1
@@ -338,7 +325,7 @@ def calc_atr_percent(df, period=14):
 # 两处调用: _check_ma_conditions(输出描述) / check_ma(筛选+返回dict)
 # ══════════════════════════════════════════════════════════════════
 
-def _cond1_ma排列(idx, ma5, ma10, ma20, ma60, close, ma5_slope, ma10_slope, ma20_slope):
+def _cond1_ma_line(idx, ma5, ma10, ma20, ma60, close):
     """① MA5>MA10>MA20 且 MA5>MA60, MA10>MA60（多头排列）"""
     ok = ma5[idx] > ma10[idx] > ma20[idx] and ma5[idx] > ma60[idx] and ma10[idx] > ma60[idx]
     if not ok:
@@ -720,18 +707,12 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
     # ── MA斜率 ──
     has_pre_slope = "_ma5_slope_atr" in df.columns
     if has_pre_slope:
-        ma5_slope      = df["_ma5_slope"].values.astype(float)
-        ma10_slope     = df["_ma10_slope"].values.astype(float)
-        ma20_slope     = df["_ma20_slope"].values.astype(float)
         ma5_slope_atr  = df["_ma5_slope_atr"].values.astype(float)
         ma10_slope_atr = df["_ma10_slope_atr"].values.astype(float)
         ma20_slope_atr = df["_ma20_slope_atr"].values.astype(float)
     else:
         has_pre_atr = "_atr_pct" in df.columns
         atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
-        ma5_slope  = np.array([_lr_slope(ma5,  idx) for idx in range(n)])
-        ma10_slope = np.array([_lr_slope(ma10, idx) for idx in range(n)])
-        ma20_slope = np.array([_lr_slope(ma20, idx) for idx in range(n)])
         ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
         ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
         ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
@@ -741,8 +722,6 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
     ma10_d = (ma10[i]/ma10[i-1]-1)*100 if i>=1 else -999
     ma20_d = (ma20[i]/ma20[i-1]-1)*100 if i>=1 else -999
     gain_day = (close[i]/close[i-1]-1)*100 if i>=1 else float('nan')
-    gain5    = (close[i]/close[i-5]-1)*100 if i>=5 else float('nan')
-    gain20   = (close[i]/close[i-20]-1)*100 if i>=20 else float('nan')
     turnover_avg = np.mean(turnover[i-4:i+1]) if i >= 4 else -999.0
     turnover_now  = float(turnover[i])
     turnover_prev = float(turnover[i-1]) if i >= 1 else 0.0
@@ -750,7 +729,7 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
     mc = (close[i]*outs[i]/1e8) if (outs is not None and not np.isnan(outs[i]) and outs[i]>0) else 0.0
 
     lines = []
-    ok1, msg1 = _cond1_ma排列(i, ma5, ma10, ma20, ma60, close, ma5_slope, ma10_slope, ma20_slope)
+    ok1, msg1 = _cond1_ma_line(i, ma5, ma10, ma20, ma60, close)
     lines.append(f"① {msg1} → {GREEN_CHECK if ok1 else RED_CROSS}")
 
     ok2a, msg2a = _cond2a_slope_atr(i, ma5_slope_atr, ma10_slope_atr, ma20_slope_atr)
@@ -849,9 +828,6 @@ def check_ma(df: pd.DataFrame,
         ma5_slope_atr  = df["_ma5_slope_atr"].values.astype(float)
         ma10_slope_atr = df["_ma10_slope_atr"].values.astype(float)
         ma20_slope_atr = df["_ma20_slope_atr"].values.astype(float)
-        ma5_slope  = df["_ma5_slope"].values.astype(float)
-        ma10_slope = df["_ma10_slope"].values.astype(float)
-        ma20_slope = df["_ma20_slope"].values.astype(float)
     else:
         has_pre_atr = "_atr_pct" in df.columns
         atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
@@ -872,7 +848,7 @@ def check_ma(df: pd.DataFrame,
     recent_20_high = float(np.max(close[i - 19:i + 1])) if i >= 19 else float(np.max(close[:i+1]))
 
     # ── 条件① ────────────────────────────────────────────
-    ok1, _ = _cond1_ma排列(i, ma5, ma10, ma20, ma60, close, ma5_slope, ma10_slope, ma20_slope)
+    ok1, _ = _cond1_ma_line(i, ma5, ma10, ma20, ma60, close)
     if not ok1:
         return None
 
@@ -941,9 +917,6 @@ def check_ma(df: pd.DataFrame,
         "ma5_daily":     round(ma5_daily, 3),
         "ma10_daily":    round(ma10_daily, 3),
         "ma20_daily":    round(ma20_daily, 3),
-        "ma5_slope":     round(ma5_slope[i], 3),
-        "ma10_slope":    round(ma10_slope[i], 3),
-        "ma20_slope":    round(ma20_slope[i], 3),
         "ma5_slope_atr":     round(ma5_slope_atr[i], 3),
         "ma10_slope_atr":    round(ma10_slope_atr[i], 3),
         "ma20_slope_atr":    round(ma20_slope_atr[i], 3),
