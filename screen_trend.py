@@ -555,12 +555,12 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
     """
     n = len(df)
     if n < 67:
-        return ["数据不足67条"]
+        return None
 
     if signal_date:
         date_map = {str(d)[:10]: idx for idx, d in enumerate(df["date"].values)}
         if signal_date not in date_map:
-            return [f"信号日 {signal_date} 不在数据中"]
+            return None
         i = date_map[signal_date]
     else:
         i = n - 1
@@ -584,7 +584,7 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
         ma60 = rolling_mean(close, 60).astype(float)
 
     if np.isnan(ma5[i]) or np.isnan(ma10[i]) or np.isnan(ma20[i]) or np.isnan(ma60[i]):
-        return ["均线数据不足（NaN）"]
+        return None
 
     lines = []
     lines.append(f"【特殊通道 — 信号日 {str(df.iloc[i]['date'])[:10]}】")
@@ -678,12 +678,12 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
     """
     n = len(df)
     if n < 67:
-        return ["数据不足67条"]
+        return None
 
     if signal_date:
         date_map = {str(d)[:10]: idx for idx, d in enumerate(df["date"].values)}
         if signal_date not in date_map:
-            return [f"信号日 {signal_date} 不在数据中"]
+            return None
         i = date_map[signal_date]
     else:
         i = n - 1
@@ -707,7 +707,7 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
         ma60 = rolling_mean(close, 60).astype(float)
 
     if np.isnan(ma5[i]) or np.isnan(ma10[i]) or np.isnan(ma20[i]) or np.isnan(ma60[i]):
-        return ["均线数据不足（NaN）"]
+        return None
 
     # ── MA斜率 ──
     has_pre_slope = "_ma5_slope_atr" in df.columns
@@ -1352,6 +1352,8 @@ def main():
                 passed_list.append(sig)
                 continue
             reason = _check_ma_conditions(df_sorted, sig)
+            if reason is None:
+                reason = [f"  [{sig} {weekday}] 数据不足或日期不在范围"]
             passed = any("通过全部条件" in line and "✓" in line for line in reason)
             if passed:
                 sys.__stdout__.write(f"\n{'='*60}\n")
