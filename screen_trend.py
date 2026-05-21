@@ -234,8 +234,8 @@ SLOPE_MA5_ATR2     = 0.400  # 下限
 SLOPE_MA10_ATR2    = 0.240  # 下限
 SLOPE_MA20_ATR2    = 0.200  # 下限
 
-SLOPE_MA5_ATR_MAX2     = 0.500   # 上限
-SLOPE_MA10_ATR_MAX2    = 0.350   # 上限
+SLOPE_MA5_ATR_MAX2     = 0.650   # 上限
+SLOPE_MA10_ATR_MAX2    = 0.420   # 上限
 SLOPE_MA20_ATR_MAX2    = 0.330   # 上限
 
 # -- 第三套参数 中期趋势延续但短期休整/平台蓄势股 --date 2026-05-19 --code 688449
@@ -566,7 +566,7 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
         i = n - 1
 
     if i < 3:
-        return ["信号日索引不足3"]
+        return None
 
     close = df["close"].values.astype(float)
     # ── 均线（优先用预计算值）─────
