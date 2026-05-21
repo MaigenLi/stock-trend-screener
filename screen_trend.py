@@ -842,22 +842,19 @@ def check_ma(df: pd.DataFrame,
     if np.isnan(ma5[i]) or np.isnan(ma10[i]) or np.isnan(ma20[i]) or np.isnan(ma60[i]):
         return None
 
-    # ── 斜率（优先用预计算值）─────
-    has_pre_slope = "_ma5_slope_atr" in df.columns
+    # ── 斜率（优先用预计算值，否则实时算每个索引）─────
+    has_pre_slope = ("_ma5_slope_atr" in df.columns and "_ma10_slope_atr" in df.columns
+                   and "_ma20_slope_atr" in df.columns)
     if has_pre_slope:
-        ma5_slope  = df["_ma5_slope"].values.astype(float)
-        ma10_slope = df["_ma10_slope"].values.astype(float)
-        ma20_slope = df["_ma20_slope"].values.astype(float)
         ma5_slope_atr  = df["_ma5_slope_atr"].values.astype(float)
         ma10_slope_atr = df["_ma10_slope_atr"].values.astype(float)
         ma20_slope_atr = df["_ma20_slope_atr"].values.astype(float)
+        ma5_slope  = df["_ma5_slope"].values.astype(float)
+        ma10_slope = df["_ma10_slope"].values.astype(float)
+        ma20_slope = df["_ma20_slope"].values.astype(float)
     else:
-        # 实时算（只算信号日这一天的）
         has_pre_atr = "_atr_pct" in df.columns
         atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
-        ma5_slope  = np.array([_lr_slope(ma5,  idx) for idx in range(n)])
-        ma10_slope = np.array([_lr_slope(ma10, idx) for idx in range(n)])
-        ma20_slope = np.array([_lr_slope(ma20, idx) for idx in range(n)])
         ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
         ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
         ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
@@ -1014,12 +1011,19 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
     if np.isnan(ma5[i]) or np.isnan(ma10[i]) or np.isnan(ma20[i]) or np.isnan(ma60[i]):
         return None
 
-    # ── 斜率（实时算每个索引，保证准确性）─────
-    has_pre_atr = "_atr_pct" in df.columns
-    atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
-    ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
-    ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
-    ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+    # ── 斜率（优先用预计算值，否则实时算每个索引）─────
+    has_pre_slope = ("_ma5_slope_atr" in df.columns and "_ma10_slope_atr" in df.columns
+                   and "_ma20_slope_atr" in df.columns)
+    if has_pre_slope:
+        ma5_slope_atr  = df["_ma5_slope_atr"].values.astype(float)
+        ma10_slope_atr = df["_ma10_slope_atr"].values.astype(float)
+        ma20_slope_atr = df["_ma20_slope_atr"].values.astype(float)
+    else:
+        has_pre_atr = "_atr_pct" in df.columns
+        atr_pct = df["_atr_pct"].values.astype(float) if has_pre_atr else calc_atr_percent(df, 14)
+        ma5_slope_atr  = np.array([_lr_slope(ma5,  idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+        ma10_slope_atr = np.array([_lr_slope(ma10, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
+        ma20_slope_atr = np.array([_lr_slope(ma20, idx) / (atr_pct[idx] + 1e-12) for idx in range(n)])
 
     # ── i日 ──────────────────────────────────────────────
     # 根据代码前缀判断板块
