@@ -770,9 +770,13 @@ def main():
 
             valid_records = [r for r in records if not r.get("error")]
             fail_records  = [r for r in records if     r.get("error")]
-            valid_records.sort(key=weighted_ratio, reverse=True)
-            display_n = args.top if args.top > 0 else len(valid_records)
-            top_n = valid_records[:display_n]
+            breakout_records = [r for r in valid_records if r.get("volume_analysis", {}).get("is_breakout")]
+            non_breakout_records = [r for r in valid_records if not r.get("volume_analysis", {}).get("is_breakout")]
+            breakout_records.sort(key=weighted_ratio, reverse=True)
+            non_breakout_records.sort(key=weighted_ratio, reverse=True)
+            sorted_records = breakout_records + non_breakout_records
+            display_n = args.top if args.top > 0 else len(sorted_records)
+            top_n = sorted_records[:display_n]
             # --show-fail 时，在尾部追加获取失败的股票（单独显示）
             if args.show_fail and fail_records:
                 top_n = top_n + fail_records
