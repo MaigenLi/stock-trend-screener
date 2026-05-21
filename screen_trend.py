@@ -66,16 +66,66 @@ def get_weekday_cn(date_input):
 # ── 预加载缓存（batch模式加速用）──
 _price = {}   # code -> DataFrame
 
+def _preload_one_stock(f: Path, sig_dt, precalc: bool, cache_dir_str: str) -> tuple[str, pd.DataFrame] | None:
+    """单个股票的预加载（供并行调用），返回 (key, df) 或 None"""
+    import pandas as pd
+    code_raw = f.stem.replace("_qfq", "")
+    key = normalize_symbol(code_raw)
+    try:
+        df = pd.read_csv(f, dtype={"date": str})
+        # 日期字符串比较："YYYY-MM-DD" 可直接字符串比较
+        sig_str = sig_dt[:10] if sig_dt else None
+        if sig_str:
+            df = df[df["date"] <= sig_str]
+        if df.empty:
+            return None
+
+        if precalc:
+            close = df["close"].values.astype(float)
+            df["_ma5"]  = rolling_mean(close, 5)
+            df["_ma10"] = rolling_mean(close, 10)
+            df["_ma20"] = rolling_mean(close, 20)
+            df["_ma60"] = rolling_mean(close, 60)
+            df["_atr_pct"] = calc_atr_percent(df, 14)
+            n = len(df)
+            ma5v  = df["_ma5"].values.astype(float)
+            ma10v = df["_ma10"].values.astype(float)
+            ma20v = df["_ma20"].values.astype(float)
+            atrv  = df["_atr_pct"].values.astype(float)
+            # ── 向量化斜率（替代 Python loop per-point）──
+            # slope[idx] = (c-a)/2 / y_mean * 100，idx>=2
+            a5, b5, c5 = ma5v[:-2],  ma5v[1:-1],  ma5v[2:]
+            ym5  = (a5 + b5 + c5) / 3.0
+            slope5_atr = ((c5 - a5) / 2.0) / (ym5 + 1e-12) * 100.0
+            # 前两个位置 NaN
+            ma5_slope_atr  = np.concatenate([[np.nan, np.nan], slope5_atr])
+            a10, b10, c10 = ma10v[:-2], ma10v[1:-1], ma10v[2:]
+            ym10 = (a10 + b10 + c10) / 3.0
+            slope10_atr = ((c10 - a10) / 2.0) / (ym10 + 1e-12) * 100.0
+            ma10_slope_atr = np.concatenate([[np.nan, np.nan], slope10_atr])
+            a20, b20, c20 = ma20v[:-2], ma20v[1:-1], ma20v[2:]
+            ym20 = (a20 + b20 + c20) / 3.0
+            slope20_atr = ((c20 - a20) / 2.0) / (ym20 + 1e-12) * 100.0
+            ma20_slope_atr = np.concatenate([[np.nan, np.nan], slope20_atr])
+            df["_ma5_slope_atr"]  = ma5_slope_atr
+            df["_ma10_slope_atr"] = ma10_slope_atr
+            df["_ma20_slope_atr"] = ma20_slope_atr
+
+        return key, df
+    except Exception:
+        return None
+
+
 def preload(signal_date=None, data_mode="raw"):
     """
     预加载所有缓存CSV到内存，batch扫描时直接查dict省去每次读文件。
-    signal_date: 只保留<=signal_date的历史数据
+    signal_date: 只保留<=signal_date的历史数据（字符串，直接字符串比较）
     data_mode: "raw" 或 "qfq"
     """
     import pandas as pd
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     global _price
 
-    # 确保 _price 已初始化
     if "_price" not in globals():
         _price = {}
 
@@ -85,49 +135,28 @@ def preload(signal_date=None, data_mode="raw"):
     else:
         files = list(cache_dir.glob("*_qfq.csv"))
 
+    precalc = False   # slope预计算开关（precalc=True 时启用 vectorized 计算）
+    sig_str = signal_date[:10] if signal_date else None
+
+    # ── 并行预加载（进程池）──
+    workers = min(22, len(files))
     loaded = 0
-    for f in files:
-        code_raw = f.stem.replace("_qfq", "")
-        key = normalize_symbol(code_raw)
-        try:
-            df = pd.read_csv(f, dtype={"date": str})
-            df["date"] = pd.to_datetime(df["date"])
-
-            # ----- 先切片，再计算指标 -----
-            if signal_date:
-                df = df[df["date"] <= pd.to_datetime(signal_date)]
-
-            if df.empty:
-                continue  # 切片后没数据就跳过
-
-            #close = df["close"].values.astype(float)
-            #df["_ma5"]  = rolling_mean(close, 5)
-            #df["_ma10"] = rolling_mean(close, 10)
-            #df["_ma20"] = rolling_mean(close, 20)
-            #df["_ma60"] = rolling_mean(close, 60)
-            #df["_atr_pct"] = calc_atr_percent(df, 14)
-
-            #n = len(df)
-            #ma5_vals  = df["_ma5"].values.astype(float)
-            #ma10_vals = df["_ma10"].values.astype(float)
-            #ma20_vals = df["_ma20"].values.astype(float)
-            #atr_vals  = df["_atr_pct"].values.astype(float)
-
-            # 为每个位置计算斜率，并除以对应位置的ATR
-            #ma5_slope_atr  = np.array([_lr_slope(ma5_vals,  idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
-            #ma10_slope_atr = np.array([_lr_slope(ma10_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
-            #ma20_slope_atr = np.array([_lr_slope(ma20_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
-
-            # 可选：存回DataFrame
-            #df["_ma5_slope_atr"]  = ma5_slope_atr
-            #df["_ma10_slope_atr"] = ma10_slope_atr
-            #df["_ma20_slope_atr"] = ma20_slope_atr
-
-            _price[key] = df
-            loaded += 1
-
-        except Exception as e:
-            print(f"加载 {f.name} 失败: {e}")
+    done = 0
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_preload_one_stock, f, sig_str, precalc, str(cache_dir)): f
+            for f in files
+        }
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                key, df = result
+                _price[key] = df
+                loaded += 1
+            done += 1
+            if done % 500 == 0:
+                sys.__stdout__.write("预加载 %d 只\n" % done)
+                sys.__stdout__.flush()
 
     print(f"预加载 {loaded} 只（{data_mode}），范围≤{signal_date or '最新'}", flush=True)
 
@@ -1118,7 +1147,7 @@ def scan(codes, names, top, signal_date=None, data_mode="raw"):
             sys.__stdout__.write(f"[ERR] {code}: {e}\n")
             pass
 
-        if (idx + 1) % 1000 == 0:
+        if (idx + 1) % 100 == 0:
             msg = "  已扫描 %d 只 ... 特殊通道 %d 只 正常 %d 只\n" % (idx+1, len(limitup_results), len(normal_results))
             sys.__stdout__.write(msg)
             sys.__stdout__.flush()
