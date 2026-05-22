@@ -217,6 +217,41 @@ def preload_all_klines(
     return result
 
 
+def get_all_tdx_codes() -> list[str]:
+    """
+    扫描上海和深圳数据目录，返回所有股票代码列表（带前缀）。
+
+    规则:
+      sh60xxxx  → 上海主板
+      sh688xxx  → 科创板
+      sz00xxxx  → 深圳主板
+      sz30xxxx  → 创业板
+
+    Returns
+    -------
+    list[str]
+        按市场+代码排序的完整列表，例: ['sh600000', 'sh600004', ..., 'sz000001', ...]
+    """
+    codes: list[str] = []
+
+    sh_dir = Path("/mnt/d/new_tdx/vipdoc/sh/lday")
+    sz_dir = Path("/mnt/d/new_tdx/vipdoc/sz/lday")
+
+    if sh_dir.is_dir():
+        for fp in sorted(sh_dir.glob("sh6?????.day")):
+            codes.append(fp.stem)          # 'sh600000'
+        for fp in sorted(sh_dir.glob("sh688???.day")):
+            codes.append(fp.stem)          # 'sh688xxx'
+
+    if sz_dir.is_dir():
+        for fp in sorted(sz_dir.glob("sz00????.day")):
+            codes.append(fp.stem)          # 'sz000xxx'
+        for fp in sorted(sz_dir.glob("sz30????.day")):
+            codes.append(fp.stem)          # 'sz300xxx'
+
+    return codes
+
+
 if __name__ == "__main__":
     import sys
     code = sys.argv[1] if len(sys.argv) > 1 else "sh600862"
