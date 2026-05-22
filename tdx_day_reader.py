@@ -21,6 +21,7 @@ TDX_DATA_SH_DIR = Path("/mnt/d/new_tdx/vipdoc/sh/lday")
 TDX_DATA_SZ_DIR = Path("/mnt/d/new_tdx/vipdoc/sz/lday")
 
 WORKSPACE = Path.home() / ".openclaw/workspace"
+STOCK_INFO_CSV = WORKSPACE / ".cache" / "stock_info.csv"
 
 # 通达信 .day 文件格式（每记录 32 字节，小端序）:
 #   0-3:   date    (uint32, YYYYMMDD)
@@ -173,13 +174,10 @@ def read_tdx_kline(
     """
     # 自动从 stock_info.csv 加载 outstanding_share（若未显式传入）
     if outstanding_share is None:
-        from pathlib import Path as P
-        # 规范化代码（纯6位 → 带前缀），与 CSV 存储格式对齐
         norm_code = _normalize_code(code)[0] + _normalize_code(code)[1]  # e.g. "600862" → "sh600862"
-        csv_path = P.home() / ".openclaw/workspace/.cache/stock_info.csv"
-        if csv_path.exists():
+        if STOCK_INFO_CSV.exists():
             import csv as csvlib
-            with open(csv_path, encoding="utf-8") as f:
+            with open(STOCK_INFO_CSV, encoding="utf-8") as f:
                 for row in csvlib.DictReader(f):
                     if row["code"] == norm_code:
                         outstanding_share = float(row["outstanding_share"]) if row["outstanding_share"] else None
