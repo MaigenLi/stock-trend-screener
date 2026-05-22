@@ -29,10 +29,9 @@ from gain_turnover import (
     normalize_symbol,
     load_stock_names_akshare,
     get_all_stock_codes_akshare,
-    load_qfq_history,
-    load_raw_history,
     rolling_mean,
 )
+from tdx_day_reader import read_tdx_kline, get_all_tdx_codes, load_stock_info_csv
 
 def get_weekday_cn(date_input):
     """
@@ -66,16 +65,16 @@ def get_weekday_cn(date_input):
 # ── 预加载缓存（batch模式加速用）──
 _price = {}   # code -> DataFrame
 
-def _preload_one_stock(f: Path, sig_dt, precalc: bool, cache_dir_str: str) -> tuple[str, pd.DataFrame] | None:
+def _preload_one_stock(code: str, sig_dt, precalc: bool) -> tuple[str, pd.DataFrame] | None:
     """单个股票的预加载（供并行调用），返回 (key, df) 或 None"""
-    import pandas as pd
-    code_raw = f.stem.replace("_qfq", "")
-    key = normalize_symbol(code_raw)
+    key = normalize_symbol(code)
     try:
-        df = pd.read_csv(f, dtype={"date": str})
-        # 日期字符串比较："YYYY-MM-DD" 可直接字符串比较
+        records = read_tdx_kline(key)
+        if not records:
+            return None
+        df = pd.DataFrame(records)
         sig_str = sig_dt[:10] if sig_dt else None
-        if sig_str:
+        if sig_str and "date" in df.columns:
             df = df[df["date"] <= sig_str]
         if df.empty:
             return None
@@ -94,12 +93,10 @@ def _preload_one_stock(f: Path, sig_dt, precalc: bool, cache_dir_str: str) -> tu
             ma20_vals = df["_ma20"].values.astype(float)
             atr_vals  = df["_atr_pct"].values.astype(float)
 
-            # 为每个位置计算斜率，并除以对应位置的ATR
             ma5_slope_atr  = np.array([_lr_slope(ma5_vals,  idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
             ma10_slope_atr = np.array([_lr_slope(ma10_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
             ma20_slope_atr = np.array([_lr_slope(ma20_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
 
-            # 可选：存回DataFrame
             df["_ma5_slope_atr"]  = ma5_slope_atr
             df["_ma10_slope_atr"] = ma10_slope_atr
             df["_ma20_slope_atr"] = ma20_slope_atr
@@ -111,9 +108,9 @@ def _preload_one_stock(f: Path, sig_dt, precalc: bool, cache_dir_str: str) -> tu
 
 def preload(signal_date=None, data_mode="raw"):
     """
-    预加载所有缓存CSV到内存，batch扫描时直接查dict省去每次读文件。
+    预加载所有 TDX 本地 .day 文件到内存，batch扫描时直接查dict省去每次读文件。
     signal_date: 只保留<=signal_date的历史数据（字符串，直接字符串比较）
-    data_mode: "raw" 或 "qfq"
+    data_mode: "raw" 或 "qfq"（均使用 TDX 本地文件）
     """
     import pandas as pd
     from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -122,23 +119,17 @@ def preload(signal_date=None, data_mode="raw"):
     if "_price" not in globals():
         _price = {}
 
-    cache_dir = RAW_CACHE_DIR if data_mode == "raw" else CACHE_DIR
-    if data_mode == "raw":
-        files = [f for f in cache_dir.glob("*.csv") if not f.name.endswith("_qfq.csv")]
-    else:
-        files = list(cache_dir.glob("*_qfq.csv"))
-
-    precalc = True   # slope预计算开关（precalc=True 时启用 vectorized 计算）
+    all_codes = get_all_tdx_codes()
+    precalc = True
     sig_str = signal_date[:10] if signal_date else None
 
-    # ── 并行预加载（进程池）──
-    workers = min(22, len(files))
+    workers = min(22, len(all_codes))
     loaded = 0
     done = 0
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(_preload_one_stock, f, sig_str, precalc, str(cache_dir)): f
-            for f in files
+            pool.submit(_preload_one_stock, code, sig_str, precalc): code
+            for code in all_codes
         }
         for fut in as_completed(futures):
             result = fut.result()
@@ -151,7 +142,7 @@ def preload(signal_date=None, data_mode="raw"):
                 sys.__stdout__.write("预加载 %d 只\n" % done)
                 sys.__stdout__.flush()
 
-    print(f"预加载 {loaded} 只（{data_mode}），范围≤{signal_date or '最新'}", flush=True)
+    print(f"预加载 {loaded} 只，范围≤{signal_date or '最新'}", flush=True)
 
 
 def _load_df(code, end_date=None, data_mode="raw"):
@@ -172,10 +163,18 @@ TURNOVER_LEN  = 5     # 近5日
 LOAD_MODE = "raw"   # 默认使用原始不复权数据 ("qfq"=前复权)
 
 def load_history(code: str, end_date: str = None, data_mode: str = "raw", refresh: bool = False):
-    """统一加载接口。data_mode: 'raw'=原始复权, 'qfq'=前复权"""
-    if data_mode == "qfq":
-        return load_qfq_history(code, end_date=end_date, refresh=refresh)
-    return load_raw_history(code, start_date=None, end_date=end_date, refresh=refresh)
+    """统一加载接口。data_mode: 'raw'=原始复权, 'qfq'=前复权
+    使用 read_tdx_kline 从本地 TDX .day 文件读取，自动带 true_turnover。"""
+    norm_code = normalize_symbol(code)
+    # outstanding_share 由 read_tdx_kline 自动从 CSV 加载
+    records = read_tdx_kline(norm_code, end_date=end_date)
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    # date 保持 string 格式（与原有逻辑一致）
+    if "date" in df.columns and hasattr(df["date"], "dt"):
+        df["date"] = df["date"].astype(str)
+    return df
 
 
 # 公式: TURNOVER_MIN = TURN_BASE × (TURN_CAP_REF / 市值)^TURN_POWER
