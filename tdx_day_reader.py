@@ -162,7 +162,8 @@ def read_tdx_kline(
     end_date : str or date, optional
         截止日期，默认为今天
     outstanding_share : float, optional
-        流通股本（股），用于计算换手率 true_turnover = volume / outstanding_share * 100
+        流通股本（股），用于计算换手率 true_turnover = volume×100 / outstanding_share × 100
+        未提供时自动从 stock_info.csv 读取
 
     Returns
     -------
@@ -170,6 +171,20 @@ def read_tdx_kline(
         每条: date, open, high, low, close, volume, amount（升序）
         当 outstanding_share > 0 时，额外包含 true_turnover（换手率%）
     """
+    # 自动从 stock_info.csv 加载 outstanding_share（若未显式传入）
+    if outstanding_share is None:
+        from pathlib import Path as P
+        # 规范化代码（纯6位 → 带前缀），与 CSV 存储格式对齐
+        norm_code = _normalize_code(code)[0] + _normalize_code(code)[1]  # e.g. "600862" → "sh600862"
+        csv_path = P.home() / ".openclaw/workspace/.cache/stock_info.csv"
+        if csv_path.exists():
+            import csv as csvlib
+            with open(csv_path, encoding="utf-8") as f:
+                for row in csvlib.DictReader(f):
+                    if row["code"] == norm_code:
+                        outstanding_share = float(row["outstanding_share"]) if row["outstanding_share"] else None
+                        break
+
     fp = _find_file(code)
     all_records = _load_all_records(fp)
     return _filter_by_date(all_records, end_date, days, outstanding_share)
