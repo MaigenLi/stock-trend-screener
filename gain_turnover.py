@@ -46,8 +46,8 @@ RAW_CACHE_DIR = WORKSPACE / ".cache" / "raw_daily"
 STOCK_CODES_FILE = Path.home() / "stock_code" / "results" / "stock_codes.txt"
 STOCK_NAMES_FILE = Path.home() / "stock_code" / "results" / "all_stock_names_final.json"
 # AkShare 股票列表缓存（沪深A股：主板+科创板+创业板，排除北交所/新三板）
-AKSHARE_STOCK_NAMES_FILE = WORKSPACE / "stock_reports" / "all_a_stock_names.csv"
-AKSHARE_STOCK_CODES_FILE  = WORKSPACE / "stock_reports" / "all_a_stock_codes.txt"
+AKSHARE_STOCK_NAMES_FILE = WORKSPACE / ".cache" / "all_a_stock_names.csv"
+AKSHARE_STOCK_CODES_FILE  = WORKSPACE / ".cache" / "all_a_stock_codes.txt"
 FUNDAMENTAL_CACHE_DIR = WORKSPACE / ".cache" / "fundamental"
 FUNDAMENTAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 

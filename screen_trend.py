@@ -87,26 +87,19 @@ def _preload_one_stock(f: Path, sig_dt, precalc: bool, cache_dir_str: str) -> tu
             df["_ma20"] = rolling_mean(close, 20)
             df["_ma60"] = rolling_mean(close, 60)
             df["_atr_pct"] = calc_atr_percent(df, 14)
+
             n = len(df)
-            ma5v  = df["_ma5"].values.astype(float)
-            ma10v = df["_ma10"].values.astype(float)
-            ma20v = df["_ma20"].values.astype(float)
-            atrv  = df["_atr_pct"].values.astype(float)
-            # ── 向量化斜率（替代 Python loop per-point）──
-            # slope[idx] = (c-a)/2 / y_mean * 100，idx>=2
-            a5, b5, c5 = ma5v[:-2],  ma5v[1:-1],  ma5v[2:]
-            ym5  = (a5 + b5 + c5) / 3.0
-            slope5_atr = ((c5 - a5) / 2.0) / (ym5 + 1e-12) * 100.0
-            # 前两个位置 NaN
-            ma5_slope_atr  = np.concatenate([[np.nan, np.nan], slope5_atr])
-            a10, b10, c10 = ma10v[:-2], ma10v[1:-1], ma10v[2:]
-            ym10 = (a10 + b10 + c10) / 3.0
-            slope10_atr = ((c10 - a10) / 2.0) / (ym10 + 1e-12) * 100.0
-            ma10_slope_atr = np.concatenate([[np.nan, np.nan], slope10_atr])
-            a20, b20, c20 = ma20v[:-2], ma20v[1:-1], ma20v[2:]
-            ym20 = (a20 + b20 + c20) / 3.0
-            slope20_atr = ((c20 - a20) / 2.0) / (ym20 + 1e-12) * 100.0
-            ma20_slope_atr = np.concatenate([[np.nan, np.nan], slope20_atr])
+            ma5_vals  = df["_ma5"].values.astype(float)
+            ma10_vals = df["_ma10"].values.astype(float)
+            ma20_vals = df["_ma20"].values.astype(float)
+            atr_vals  = df["_atr_pct"].values.astype(float)
+
+            # 为每个位置计算斜率，并除以对应位置的ATR
+            ma5_slope_atr  = np.array([_lr_slope(ma5_vals,  idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
+            ma10_slope_atr = np.array([_lr_slope(ma10_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
+            ma20_slope_atr = np.array([_lr_slope(ma20_vals, idx) / (atr_vals[idx] + 1e-12) for idx in range(n)])
+
+            # 可选：存回DataFrame
             df["_ma5_slope_atr"]  = ma5_slope_atr
             df["_ma10_slope_atr"] = ma10_slope_atr
             df["_ma20_slope_atr"] = ma20_slope_atr
@@ -135,7 +128,7 @@ def preload(signal_date=None, data_mode="raw"):
     else:
         files = list(cache_dir.glob("*_qfq.csv"))
 
-    precalc = False   # slope预计算开关（precalc=True 时启用 vectorized 计算）
+    precalc = True   # slope预计算开关（precalc=True 时启用 vectorized 计算）
     sig_str = signal_date[:10] if signal_date else None
 
     # ── 并行预加载（进程池）──
@@ -154,7 +147,7 @@ def preload(signal_date=None, data_mode="raw"):
                 _price[key] = df
                 loaded += 1
             done += 1
-            if done % 500 == 0:
+            if done % 2000 == 0:
                 sys.__stdout__.write("预加载 %d 只\n" % done)
                 sys.__stdout__.flush()
 
@@ -201,7 +194,7 @@ def get_turnover_min(cap_yi: float) -> float:
 TURNOVER_MIN  = TURN_BASE  # 向后兼容（实际使用get_turnover_min）
 MKT_CAP_MIN   = 25.0  # 流通市值下限（亿元）
 GAIN_DAY_MIN  = -2.0  # 当日涨幅下限%%
-GAIN_DAY_MAX  = 20.1   # 上调：允许涨停/接近涨停
+GAIN_DAY_MAX  = 10.1   # 上调：允许涨停/接近涨停
 MA_LEN        = 20    # 计算MA20需要
 MA_LEN_60     = 60    # 计算MA60需要
 
@@ -224,13 +217,10 @@ CLOSE_NEAR_HIGH_RATIO = 0.95   # 当前收盘 > 20日最高收盘 × CLOSE_NEAR_
 VOL_RATIO5_MAX = 1.10   # 近5日均量比（当日/前5日均）：超过此值视为放量，不建议追高
 
 # -- 第一套参数 慢牛、稳健成长股 --date 2026-05-06   --code 301013
-#GAIN20_MIN    = 20.0  # 下调：目标股20日涨幅多在7~12%
-#GAIN20_MIN    = 18.0  # 下调：目标股20日涨幅多在7~12%
-GAIN20_MIN    = 14.0  # 下调：目标股20日涨幅多在7~12%
-GAIN20_MAX    = 38.0  # 目标股20日涨幅可达60%
-#GAIN5_MIN     = 5  # 目标股5日涨幅多在2~25%）
 GAIN5_MIN     = 3.5  # 目标股5日涨幅多在2~25%）
 GAIN5_MAX     = 13.8   # 目标股5日涨幅可达53%
+GAIN20_MIN    = 14.0  # 下下限：目标股20日涨幅多在7~12%
+GAIN20_MAX    = 33.0  # 目标股20日涨幅可达60%
 
 # 日变
 #MA5_DAILY  = 1.12
@@ -239,8 +229,8 @@ MA10_DAILY = 0.40
 MA20_DAILY = 0.65
 
 # 均线斜率 / ATR波动率
-#SLOPE_MA5_ATR     = 0.170  # 下限
 SLOPE_MA5_ATR     = 0.130  # 下限
+#SLOPE_MA5_ATR     = 0.170  # 下限
 SLOPE_MA10_ATR    = 0.050  # 下限
 SLOPE_MA20_ATR    = 0.124  # 下限
 
@@ -250,10 +240,10 @@ SLOPE_MA20_ATR_MAX    = 0.350   # 上限
 
 
 # -- 第二套参数 主升浪、短线强势股 --
+GAIN5_MIN2 = 10.0
+GAIN5_MAX2 = 21.0
 GAIN20_MIN2 = 25.0
-GAIN20_MAX2 = 65.0
-GAIN5_MIN2 = 8.0
-GAIN5_MAX2 = 25.0
+GAIN20_MAX2 = 40.0
 
 # 日变
 MA5_DAILY2  = 1.80
@@ -265,6 +255,7 @@ SLOPE_MA5_ATR2     = 0.400  # 下限
 SLOPE_MA10_ATR2    = 0.240  # 下限
 SLOPE_MA20_ATR2    = 0.200  # 下限
 
+#SLOPE_MA5_ATR_MAX2     = 0.550   # 上限
 SLOPE_MA5_ATR_MAX2     = 0.650   # 上限
 SLOPE_MA10_ATR_MAX2    = 0.420   # 上限
 SLOPE_MA20_ATR_MAX2    = 0.330   # 上限
@@ -290,22 +281,25 @@ SLOPE_MA10_ATR_MAX3    = 0.400   # 上限
 SLOPE_MA20_ATR_MAX3    = 0.350   # 上限
 
 # ═══════════════════════════════════════════════════════════════
-# 特殊通道参数 — 涨停蓄势后突破
+# 特殊通道参数 — 涨停蓄势后突破    --date 2024-08-15 --code 000062
 # ═══════════════════════════════════════════════════════════════
 # 信号日(i)涨停：close(i)为20日最高，且满足均线多头+MA5斜率加速
-LIMITUP_I_SLOPE_MA5   = 0.2   # ma5_slope
-LIMITUP_I_DAILY_MA5   = 1.0   # ma5_daily  > 1.0%
-#LIMITUP_I_SLOPE_MA10   = 0.25   # ma10_slope
-LIMITUP_I_SLOPE_MA10   = 0.45   # ma10_slope
+#LIMITUP_I_SLOPE_MA5   = 0.2   # ma5_slope
+LIMITUP_I_SLOPE_MA5   = 0.38   # ma5_slope
+LIMITUP_I_DAILY_MA5   = 1.9   # ma5_daily  > 1.0%
+LIMITUP_I_SLOPE_MA10   = 0.28   # ma10_slope
+#LIMITUP_I_SLOPE_MA10   = 0.45   # ma10_slope
 LIMITUP_I_SLOPE_MA20   = 0.23   # ma20_slope
 LIMITUP_I_DAILY_MA10   = 0.5   # ma5_daily  < 0.5%
 LIMITUP_I_VOLUME       = 1.2   # 量比放大 1.2
 # 前1天(i-1)：涨幅<6%，ma5_slope在0~0.7%，ma5_daily在0~0.5%
+LIMITUP_I1_SLOPE_MA5_U = 0.18   # ma5_slope
 #LIMITUP_I1_SLOPE_MA5_U = 0.15   # ma5_slope
-LIMITUP_I1_SLOPE_MA5_U = 0.23   # ma5_slope
-LIMITUP_I1_DAILY_U     = 1.5   # ma5_daily  < 1.0%
+#LIMITUP_I1_SLOPE_MA5_U = 0.23   # ma5_slope
+#LIMITUP_I1_DAILY_U     = 1.5   # ma5_daily  < 1.0%
+LIMITUP_I1_DAILY_U     = 1.0   # ma5_daily  < 1.0%
 # 前2天(i-2)：涨幅<2%，ma5_slope<0.3%，ma5_daily<0.2%
-LIMITUP_I2_SLOPE_MA5_U = 0.18   # ma5_slope
+LIMITUP_I2_SLOPE_MA5_U = 0.17   # ma5_slope
 LIMITUP_I2_DAILY_U     = 1.0   # ma5_daily  < 1.0%
 
 LIMITUP_GAIN_DAY_MAX  = 3.0   #
@@ -470,14 +464,14 @@ def _cond2b_3_ma_daily(idx, ma5_daily, ma10_daily, ma20_daily, close):
     else:
         return False, " ".join(msg)
 
-def _cond3_mktcap(idx, mktcap):
+def _cond_mktcap(idx, mktcap):
     """③ 流通市值 >= 下限"""
     ok = mktcap >= MKT_CAP_MIN
     if not ok:
         return False, f"流通市值{mktcap:.1f}亿 < {MKT_CAP_MIN}亿"
     return True, f"流通市值{mktcap:.1f}亿 ≥ {MKT_CAP_MIN}亿"
 
-def _cond4_turnover(idx, turnover_avg, turnover_now, turnover_prev, gain_day, mktcap):
+def _cond_turnover(idx, turnover_avg, turnover_now, turnover_prev, gain_day, mktcap):
     """④ 近5日平均换手率 >= 自适应下限（或当日放量大涨满足豁免）"""
     turn_thresh = get_turnover_min(mktcap) if mktcap > 0 else TURN_BASE
     ok = turnover_avg >= turn_thresh
@@ -492,20 +486,37 @@ def _cond4_turnover(idx, turnover_avg, turnover_now, turnover_prev, gain_day, mk
                 return False, f"近5日均换手{turnover_avg:.2f}% < {turn_thresh:.1f}%，不满足豁免条件"
     return True, f"近5日均换手{turnover_avg:.2f}% ≥ {turn_thresh:.1f}%（市值{mktcap:.0f}亿）"
 
-def _cond6_gain_day(idx, gain_day):
-    """⑥ 当日涨幅在合理区间"""
+def _cond_gain_day(idx, gain_day):
+    """⑤ 当日涨幅在合理区间"""
     ok = GAIN_DAY_MIN <= gain_day <= GAIN_DAY_MAX
     if not ok:
         return False, f"当日涨幅{gain_day:+.2f}% 不在[{GAIN_DAY_MIN},{GAIN_DAY_MAX}]%"
     return True, f"当日涨幅{gain_day:+.2f}% ∈ [{GAIN_DAY_MIN},{GAIN_DAY_MAX}]%"
 
-def _cond7_close_near_high(idx, close, recent_20_high):
-    """⑦ 收盘价接近20日最高"""
+def _cond_close_near_high(idx, close, recent_20_high):
+    """⑥ 收盘价接近20日最高"""
     thresh = recent_20_high * CLOSE_NEAR_HIGH_RATIO
     ok = close[idx] >= thresh
     if not ok:
         return False, f"收盘{close[idx]:.2f} < 20日最高{recent_20_high:.2f}×{CLOSE_NEAR_HIGH_RATIO}={thresh:.2f}"
     return True, f"收盘{close[idx]:.2f} ≥ 20日最高×{CLOSE_NEAR_HIGH_RATIO}={thresh:.2f}"
+
+def _cond_slope_atr_div(idx, ma5_slope_atr, ma10_slope_atr, close):
+    """⑦ MA5/MA10 均线斜率/ATR波动率比率在合理区间"""
+    gain20   = (close[idx]/close[idx-20]-1)*100 if idx>=20 else float('nan')
+    ma5_atr_div_ma10_atr = ma5_slope_atr[idx]/ma10_slope_atr[idx]
+
+    ext1 = ma5_atr_div_ma10_atr > 1.6 and gain20 > 31 and ma5_slope_atr[idx] > 0.5
+    ext2 = gain20 < 20 and ma5_slope_atr[idx] < 0.2 and ma10_slope_atr[idx] < 0.2
+    if ext1 or ext2:
+        return False, f"均线斜率/ATR波动率特别排除：{ma5_atr_div_ma10_atr:.2f}"
+
+    if ma5_slope_atr[idx] > 0.6: #SLOPE_MA5_ATR2:
+        ext1 = ma5_atr_div_ma10_atr > 2.3 and gain20 > 36
+        if ext1:
+            return False, f"均线斜率/ATR波动率特别排除：{ma5_atr_div_ma10_atr:.2f}"
+
+    return True, f"均线斜率/ATR波动率正常：{ma5_atr_div_ma10_atr:.2f}"
 
 # ── 共用工具：3点线性回归斜率（归一化）──
 def _lr_slope(arr, idx):
@@ -573,8 +584,8 @@ def _cond_lim_i1(idx, close, ma5_slope_atr, ma5_daily_i1, ma5):
     if not ok_gain:
         gain_i1 = (close[idx - 1] / close[idx - 2] - 1) * 100
         ok_gain  = gain_i1 < LIMITUP_GAIN_DAY_MAX
-    ok_slope = LIMITUP_I1_SLOPE_MA5_U > ma5_slope_atr[idx - 1]
-    ok_daily = LIMITUP_I1_DAILY_U > ma5_daily_i1
+    ok_slope = ma5_slope_atr[idx - 1] < LIMITUP_I1_SLOPE_MA5_U
+    ok_daily = ma5_daily_i1 < LIMITUP_I1_DAILY_U
     return ok_gain, ok_slope, ok_daily, gain_i1
 
 def _cond_lim_i2(idx, close, ma5_slope_atr, ma5_daily_i2, ma5):
@@ -787,19 +798,22 @@ def _check_ma_conditions(df: pd.DataFrame, signal_date: str = None):
                 lines.append(f"②-1_3 {msg2a_3} → {GREEN_CHECK if ok2a_3 else RED_CROSS}")
                 lines.append(f"②-2_3 {msg2b_3} → {GREEN_CHECK if ok2b_3 else RED_CROSS}")
 
-    ok3, msg3 = _cond3_mktcap(i, mc)
+    ok3, msg3 = _cond_mktcap(i, mc)
     lines.append(f"③ {msg3} → {GREEN_CHECK if ok3 else RED_CROSS}")
 
-    ok4, msg4 = _cond4_turnover(i, turnover_avg, turnover_now, turnover_prev, gain_day, mc)
+    ok4, msg4 = _cond_turnover(i, turnover_avg, turnover_now, turnover_prev, gain_day, mc)
     lines.append(f"④ {msg4} → {GREEN_CHECK if ok4 else RED_CROSS}")
 
-    ok6, msg6 = _cond6_gain_day(i, gain_day)
-    lines.append(f"⑤ {msg6} → {GREEN_CHECK if ok6 else RED_CROSS}")
+    ok5, msg5 = _cond_gain_day(i, gain_day)
+    lines.append(f"⑤ {msg5} → {GREEN_CHECK if ok5 else RED_CROSS}")
 
-    ok7, msg7 = _cond7_close_near_high(i, close, recent_20_high)
-    lines.append(f"⑥ {msg7} → {GREEN_CHECK if ok7 else RED_CROSS}")
+    ok6, msg6 = _cond_close_near_high(i, close, recent_20_high)
+    lines.append(f"⑥ {msg6} → {GREEN_CHECK if ok6 else RED_CROSS}")
 
-    lines.append(f"\n  最终：{'✓ 通过全部条件' if (ok1 and ((ok2a and ok2b) or (ok2a_2 and ok2b_2)) and ok3 and ok4 and ok6 and ok7) else '✗ 淘汰'}")
+    ok7, msg7 = _cond_slope_atr_div(i, ma5_slope_atr, ma10_slope_atr, close)
+    lines.append(f"⑦ {msg7} → {GREEN_CHECK if ok7 else RED_CROSS}")
+
+    lines.append(f"\n  最终：{'✓ 通过全部条件' if (ok1 and ((ok2a and ok2b) or (ok2a_2 and ok2b_2)) and ok3 and ok4 and ok5 and ok6 and ok7) else '✗ 淘汰'}")
     return lines
 
 
@@ -903,22 +917,27 @@ def check_ma(df: pd.DataFrame,
         mktcap = MKT_CAP_MIN
     else:
         mktcap = close[i] * outs[i] / 1e8
-    ok3, _ = _cond3_mktcap(i, mktcap)
+    ok3, _ = _cond_mktcap(i, mktcap)
     if not ok3:
         return None
 
     # ── 条件④ 换手率 ─────────────────────────────────────
-    ok4, _ = _cond4_turnover(i, turnover_avg, turnover_now, turnover_prev, gain_day, mktcap)
+    ok4, _ = _cond_turnover(i, turnover_avg, turnover_now, turnover_prev, gain_day, mktcap)
     if not ok4:
         return None
 
     # ── 条件⑤ 当日涨幅 ───────────────────────────────────
-    ok6, _ = _cond6_gain_day(i, gain_day)
-    if not ok6:
+    ok5, _ = _cond_gain_day(i, gain_day)
+    if not ok5:
         return None
 
     # ── 条件⑥ 收盘近20日最高 ──────────────────────────────
-    ok7, _ = _cond7_close_near_high(i, close, recent_20_high)
+    ok6, _ = _cond_close_near_high(i, close, recent_20_high)
+    if not ok6:
+        return None
+
+    # ── 条件⑦ 波动率特别排除 ──────────────────────────────
+    ok7, _ = _cond_slope_atr_div(i, ma5_slope_atr, ma10_slope_atr, close)
     if not ok7:
         return None
 
@@ -934,6 +953,7 @@ def check_ma(df: pd.DataFrame,
     vol5_prev = np.mean(df["volume"].values[i-9:i-4]) if i >= 10 else np.mean(df["volume"].values[max(0,i-9):i])
     vol_ratio = (vol5_avg / vol5_prev) if vol5_prev > 0 else 0.0
     spread = (ma5[i]/ma10[i] - 1)*100 + (ma10[i]/ma20[i] - 1)*100
+
     return {
         "date":          str(df["date"].values[i])[:10],
         "close":         round(close[i], 2),
@@ -949,6 +969,7 @@ def check_ma(df: pd.DataFrame,
         "ma5_slope_atr":     round(ma5_slope_atr[i], 3),
         "ma10_slope_atr":    round(ma10_slope_atr[i], 3),
         "ma20_slope_atr":    round(ma20_slope_atr[i], 3),
+        "ma5_atr_div_ma10_atr":     round((ma5_slope_atr[i]/ma10_slope_atr[i]), 2),
         "ma5_chg5d":     round(ma5_chg5d, 2),
         "ma10_chg5d":    round(ma10_chg5d, 2),
         "ma20_chg5d":    round(ma20_chg5d, 2),
@@ -966,6 +987,10 @@ def check_ma(df: pd.DataFrame,
         "ok2b_2": ok2b_2,
         "ok2a_3": ok2a_3,
         "ok2b_3": ok2b_3,
+        "ok3": ok3,
+        "ok4": ok4,
+        "ok5": ok5,
+        "ok6": ok6,
     }
 
 # 全局log_file用于scan()中的进度输出（终端+文件双写）
@@ -1105,10 +1130,11 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
         "limit_up_price": limit_up_price,
         "recent_20_high": recent_20_high,
         "_limitup": True,
-        "ma5_slope_atr":      round(ma5_slope_atr[i], 3),
         "ma5_daily":      round(ma5_daily_i, 3),
+        "ma5_slope_atr":      round(ma5_slope_atr[i], 3),
         "ma10_slope_atr":     round(ma10_slope_atr[i], 3),
         "ma20_slope_atr":     round(ma20_slope_atr[i], 3),
+        "ma5_atr_div_ma10_atr":     round((ma5_slope_atr[i]/ma10_slope_atr[i]), 2),
         "gain_i1":        round(gain_i1, 2),
         "gain_i2":        round(gain_i2, 2),
         "ma5_slope_atr_i1":   round(ma5_slope_atr[i-1], 3),
@@ -1147,14 +1173,15 @@ def scan(codes, names, top, signal_date=None, data_mode="raw"):
             sys.__stdout__.write(f"[ERR] {code}: {e}\n")
             pass
 
-        if (idx + 1) % 100 == 0:
+        if (idx + 1) % 2000 == 0:
             msg = "  已扫描 %d 只 ... 特殊通道 %d 只 正常 %d 只\n" % (idx+1, len(limitup_results), len(normal_results))
             sys.__stdout__.write(msg)
             sys.__stdout__.flush()
 
     # 特殊通道排在最前面
     limitup_results.sort(key=lambda x: -x["gain20"])
-    normal_results.sort(key=lambda x: -x["gain20"])
+    #normal_results.sort(key=lambda x: -x["gain20"])
+    normal_results.sort(key=lambda x: -x["ma5_atr_div_ma10_atr"])
     total_lim = len(limitup_results)
     total_nor = len(normal_results)
     msg = "\n  [OK] 扫描完毕  特殊通道 %d 只  正常通道 %d 只（各取前 %d 只）\n\n" % (total_lim, total_nor, top)
@@ -1199,15 +1226,15 @@ def print_results(results, signal_date=None, weekday_cn=None):
     print(f"\n{sep}")
     print(f"  信号日: {date_label}  找到 {len(results)} 只")
     print(sep)
-    print("%3s  %-8s  %-8s  %-10s  %-5s  %-6s  %-5s  %-5s %-5s %-7s %-7s %-7s %-6s" % ("#","代码","名称","日期","收盘","20日涨","均换手","换手今","量比", "MA5/ATR", "MA10/ATR", "MA20/ATR", "市值(亿)"))
+    print("%3s  %-8s  %-8s  %-10s  %-5s  %-6s  %-5s  %-5s %-5s %-7s %-7s %-7s %-6s" % ("#","代码","名称","日期","收盘","20日涨","均换手","换手今","量比", "MA5/ATR", "MA10/ATR", "MA5A/MA10A", "市值(亿)"))
     print("-" * 120)
     for rank, r in enumerate(results, 1):
         tag = " 🔴特殊" if r.get("_limitup") else ""
         print("%3d  %-8s  %-8s  %-10s  %7.2f  %+7.1f%%  %7.2f%%  %6.2f%%  %5.2fx   %5.2f    %5.2f    %5.2f  %5.0f%s" % (
             rank, r["code"], r["name"], r["date"], r["close"],
-            r["gain20"], r["turnover_avg"], r["turnover_today"], r["vol_ratio"], r["ma5_slope_atr"], r["ma10_slope_atr"], r["ma20_slope_atr"], r["mktcap"], tag))
+            r["gain20"], r["turnover_avg"], r["turnover_today"], r["vol_ratio"], r["ma5_slope_atr"], r["ma10_slope_atr"], r["ma5_atr_div_ma10_atr"], r["mktcap"], tag))
     print()
-    print_detail(results[:10])
+    print_detail(results[:100])
 
 
 def print_detail(results: list):
@@ -1236,6 +1263,10 @@ def print_detail(results: list):
         ok2b_2 = r['ok2b_2']
         ok2a_3 = r['ok2a_3']
         ok2b_3 = r['ok2b_3']
+        ok3 = r['ok3']
+        ok4 = r['ok4']
+        ok5 = r['ok5']
+        ok6 = r['ok6']
 
         if ok2a and ok2b:
             print(f"   ②-1_1 MA5_atr={r['ma5_slope_atr']:.3f} [{SLOPE_MA5_ATR:.3f},{SLOPE_MA5_ATR_MAX:.3f})  MA10_atr={r['ma10_slope_atr']:.3f} [{SLOPE_MA10_ATR:.3f},{SLOPE_MA10_ATR_MAX:.3f})  MA20_atr={r['ma20_slope_atr']:.3f} [{SLOPE_MA20_ATR:.3f},{SLOPE_MA20_ATR_MAX:.3f})  →  {GREEN_CHECK if ok2a else RED_CROSS}")
@@ -1252,9 +1283,10 @@ def print_detail(results: list):
             print(f"   ②-2_3 MA5_daily={r['ma5_daily']:+.3f}%>={MA5_DAILY3:.3f}%  MA10_daily={r['ma10_daily']:+.3f}%>={MA10_DAILY3:.3f}%  MA20_daily={r['ma20_daily']:+.3f}%>={MA20_DAILY3:.3f}%  →  {GREEN_CHECK if ok2b_3 else RED_CROSS}")
             print(f"         5日涨幅 {r['gain5']:+.1f}% (需{GAIN5_MIN3}%~{GAIN5_MAX3}%)  →  {GREEN_CHECK if GAIN5_MAX3>=r['gain5']>=GAIN5_MIN3 else RED_CROSS}")
             print(f"         20日涨幅 {r['gain20']:+.1f}% (需{GAIN20_MIN3}%~{GAIN20_MAX3}%)  →  {GREEN_CHECK if GAIN20_MAX3>=r['gain20']>=GAIN20_MIN3 else RED_CROSS}")
+        print(f"         MA5_atr/MA10_atr {r['ma5_atr_div_ma10_atr']:.2f}%")
         mc_d = r.get('mktcap', 0)
         thr_d = get_turnover_min(mc_d)
-        print(f"   ③ 近5日均换手率 {r['turnover_avg']:.2f}% (需≥{thr_d:.1f}%，市值{mc_d:.0f}亿)  →  {GREEN_CHECK if r['turnover_avg'] >= thr_d else RED_CROSS}")
+        print(f"   ③ 近5日均换手率 {r['turnover_avg']:.2f}% (需≥{thr_d:.1f}%，市值{mc_d:.0f}亿)  →  {GREEN_CHECK if ok4 else RED_CROSS}")
         print(f"   MA5近5日变化 {r['ma5_chg5d']:+.2f}%  MA10近5日 {r['ma10_chg5d']:+.2f}%  MA20近5日 {r['ma20_chg5d']:+.2f}%")
         print(f"   均线发散度 {r['spread']:.2f}%")
         print()
@@ -1352,7 +1384,9 @@ def main():
                 for line in reason_lim:
                     sys.__stdout__.write("  " + line + "\n")
                 sys.__stdout__.flush()
-                passed_list.append(sig)
+                last_fail = [line for line in reason_lim if "✗" in line]
+                if not last_fail:
+                    passed_list.append(sig)
                 continue
             reason = _check_ma_conditions(df_sorted, sig)
             if reason is None:

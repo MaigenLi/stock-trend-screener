@@ -21,9 +21,10 @@ echo "[$(date '+%H:%M:%S')] 步骤1完成，休息60秒..."
 sleep 60
 
 # 步骤2：缓存前复权日线（默认开启验证）
-echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_qfq_daily.py --date ${DATE} --refresh"
-${PYTHON} ${WORKSPACE}/cache_qfq_daily.py --date ${DATE} --refresh >> ${LOG_DIR}/qfq_cache.log 2>&1
+#echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_qfq_daily.py --date ${DATE} --refresh"
+#${PYTHON} ${WORKSPACE}/cache_qfq_daily.py --date ${DATE} --refresh >> ${LOG_DIR}/qfq_cache.log 2>&1
 sleep 60
+echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_raw_daily.py --date ${DATE} --refresh --refresh-list"
 ${PYTHON} ${WORKSPACE}/cache_raw_daily.py --date ${DATE} --refresh --refresh-list >> ${LOG_DIR}/raw_cache.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤2完成，休息60秒..."
 sleep 60
