@@ -25,13 +25,13 @@ RAW_CACHE_DIR = WORKSPACE / ".cache" / "raw_daily"
 
 import numpy as np
 import pandas as pd
-from gain_turnover import (
-    normalize_symbol,
-    load_stock_names_akshare,
-    get_all_stock_codes_akshare,
-    rolling_mean,
-)
 from tdx_day_reader import read_tdx_kline, get_all_tdx_codes, load_stock_info_csv
+
+def normalize_symbol(code: str) -> str:
+    code = str(code).strip().lower()
+    if code.startswith(("sh", "sz")):
+        return code[-6:]
+    return code
 
 def get_weekday_cn(date_input):
     """
@@ -1342,7 +1342,9 @@ def main():
 
     sys.__stdout__.write("加载股票名称 ... ")
     sys.__stdout__.flush()
-    names = load_stock_names_akshare()
+    stock_info = load_stock_info_csv()
+    # stock_info: {code: {name, outstanding_share}}
+    names = {code: info["name"] for code, info in stock_info.items()}
     sys.__stdout__.write("完成 (%d 只)\n\n" % len(names))
     sys.__stdout__.flush()
 
@@ -1470,7 +1472,7 @@ def main():
     hint = f"（信号日 {args.date} {weekday_cn}）" if args.date else "（信号日 最新交易日）"
     sys.__stdout__.write(f"全市场扫描 {hint}（自适应幂律换手率）...\n")
     sys.__stdout__.flush()
-    codes = get_all_stock_codes_akshare()
+    codes = get_all_tdx_codes()
     if args.blk:
         blk_path = Path(args.blk)
         if not blk_path.exists():
