@@ -194,7 +194,7 @@ def get_turnover_min(cap_yi: float) -> float:
 TURNOVER_MIN  = TURN_BASE  # 向后兼容（实际使用get_turnover_min）
 MKT_CAP_MIN   = 25.0  # 流通市值下限（亿元）
 GAIN_DAY_MIN  = -2.0  # 当日涨幅下限%%
-GAIN_DAY_MAX  = 10.1   # 上调：允许涨停/接近涨停
+GAIN_DAY_MAX  = 8.0   # 上调：允许涨停/接近涨停
 MA_LEN        = 20    # 计算MA20需要
 MA_LEN_60     = 60    # 计算MA60需要
 
