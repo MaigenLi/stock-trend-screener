@@ -238,10 +238,11 @@ def get_all_tdx_codes() -> list[str]:
     sz_dir = Path("/mnt/d/new_tdx/vipdoc/sz/lday")
 
     if sh_dir.is_dir():
-        for fp in sorted(sh_dir.glob("sh6?????.day")):
+        # sh60xxxx: 上海主板（固定60前缀，5位数字）
+        for fp in sorted(sh_dir.glob("sh60????.day")):
             codes.append(fp.stem)          # 'sh600000'
         for fp in sorted(sh_dir.glob("sh688???.day")):
-            codes.append(fp.stem)          # 'sh688xxx'
+            codes.append(fp.stem)          # 'sh688xxx' 科创板
 
     if sz_dir.is_dir():
         for fp in sorted(sz_dir.glob("sz00????.day")):
