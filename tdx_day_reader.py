@@ -176,22 +176,32 @@ def read_tdx_kline(
 
 
 def print_kline(code: str, days: int = 10,
-                end_date: Optional[str] = None) -> list[dict]:
+                end_date: Optional[str] = None,
+                outstanding_share: Optional[float] = None) -> list[dict]:
     """打印 K 线数据的便捷函数"""
-    data = read_tdx_kline(code, days=days, end_date=end_date or "today")
+    data = read_tdx_kline(code, days=days, end_date=end_date or "today",
+                          outstanding_share=outstanding_share)
     if not data:
         print(f"未找到数据: {code}")
         return []
 
+    has_turnover = any('true_turnover' in r for r in data)
+
     print(f"\n{'='*80}")
     print(f"股票代码: {code}  |  最近 {len(data)} 天  |  截止: {data[-1]['date']}")
     print(f"{'='*80}")
-    print(f"{'日期':<10} {'开盘':>6} {'最高':>6} {'最低':>6} {'收盘':>6} {'成交量(手)':>8} {'成交额':>10}")
-    print("-" * 80)
+    header = f"{'日期':<10} {'开盘':>6} {'最高':>6} {'最低':>6} {'收盘':>6} {'成交量(手)':>8} {'成交额':>10}"
+    if has_turnover:
+        header += f" {'换手率':>7}"
+    print(header)
+    print("-" * (80 + (7 if has_turnover else 0)))
     for r in data:
-        print(f"{r['date']:<12} {r['open']:>8.2f} {r['high']:>8.2f} {r['low']:>8.2f} "
-              f"{r['close']:>8.2f} {r['volume']:>12.0f} {r['amount']:>14.2f}")
-    print("-" * 80)
+        line = (f"{r['date']:<12} {r['open']:>8.2f} {r['high']:>8.2f} {r['low']:>8.2f} "
+                f"{r['close']:>8.2f} {r['volume']:>12.0f} {r['amount']:>14.2f}")
+        if 'true_turnover' in r:
+            line += f" {r['true_turnover']:>6.2f}%"
+        print(line)
+    print("-" * (80 + (7 if has_turnover else 0)))
     return data
 
 
