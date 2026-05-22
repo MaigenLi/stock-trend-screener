@@ -349,29 +349,22 @@ def update_stock_info_csv(csv_path: Optional[Path] = None,
 
     # ── 4. 从 AkShare 获取 outstanding_share ────────────
     outstanding_map: dict[str, float] = {}
-    if not refresh:
-        if progress:
-            print("  联网获取流通股本（最近日线）...")
-        failed = []
-        def _fetch_outstanding(code: str) -> tuple[str, float | None]:
-            try:
-                df = ak.stock_zh_a_daily(symbol=code, adjust="qfq")
-                if not df.empty and "outstanding_share" in df.columns:
-                    val = float(df["outstanding_share"].iloc[-1])
-                    return (code, round(val, 1))
-            except Exception:
-                pass
-            return (code, None)
+    failed: list[str] = []
 
-        codes_need_fetch = [c for c in all_codes
-                           if refresh
-                           or c not in existing
-                           or existing.get(c, {}).get("outstanding_share", 0) == 0]
-        if progress:
-            print(f"  待获取 outstanding: {len(codes_need_fetch)} 只")
+    def _fetch_outstanding(code: str) -> tuple[str, float | None]:
+        try:
+            df = ak.stock_zh_a_daily(symbol=code, adjust="qfq")
+            if not df.empty and "outstanding_share" in df.columns:
+                val = float(df["outstanding_share"].iloc[-1])
+                return (code, round(val, 1))
+        except Exception:
+            pass
+        return (code, None)
 
-        for i in range(0, len(codes_need_fetch), batch_size):
-            batch = codes_need_fetch[i:i + batch_size]
+    def _do_fetch(codes_batch: list[str]) -> None:
+        nonlocal outstanding_map, failed
+        for i in range(0, len(codes_batch), batch_size):
+            batch = codes_batch[i:i + batch_size]
             with ThreadPoolExecutor(max_workers=min(8, len(batch))) as pool:
                 futures = {pool.submit(_fetch_outstanding, c): c for c in batch}
                 for fut in as_completed(futures):
@@ -381,12 +374,28 @@ def update_stock_info_csv(csv_path: Optional[Path] = None,
                     else:
                         failed.append(code)
             if progress and (i + batch_size) % 500 == 0:
-                print(f"    进度 {i + batch_size}/{len(codes_need_fetch)} ...")
+                print(f"    进度 {i + batch_size}/{len(codes_batch)} ...")
 
+    if refresh:
+        # refresh=True: 全量重新获取所有股票
         if progress:
-            print(f"  outstanding 获取完成: {len(outstanding_map)} 只成功, {len(failed)} 只失败")
-            if failed[:5]:
-                print(f"  失败样例: {failed[:5]}")
+            print(f"  [refresh] 全量获取 outstanding_share ({len(all_codes)} 只)...")
+        _do_fetch(list(all_codes))
+        if progress:
+            print(f"  [refresh] 完成: {len(outstanding_map)} 只成功, {len(failed)} 只失败")
+    else:
+        # 非 refresh: 获取 CSV 中 outstanding=0 的缺失项，以及非零但可能异常的值
+        # 获取 CSV 中从未有过的股票（outstanding 列为空/0）
+        codes_need_fetch = [c for c in all_codes
+                           if existing.get(c, {}).get("outstanding_share", 0) == 0]
+        if progress:
+            print(f"  联网获取流通股本（outstanding=0 补获取，{len(codes_need_fetch)} 只）...")
+        if codes_need_fetch:
+            _do_fetch(codes_need_fetch)
+            if progress:
+                print(f"  outstanding 获取完成: {len(outstanding_map)} 只成功, {len(failed)} 只失败")
+                if failed[:5]:
+                    print(f"  失败样例: {failed[:5]}")
 
     # ── 5. 合并结果 ────────────────────────────────────
     results: dict[str, dict] = {}
