@@ -357,14 +357,16 @@ def update_stock_info_csv(csv_path: Optional[Path] = None,
             try:
                 df = ak.stock_zh_a_daily(symbol=code, adjust="qfq")
                 if not df.empty and "outstanding_share" in df.columns:
-                    return (code, float(df["outstanding_share"].iloc[-1]))
+                    val = float(df["outstanding_share"].iloc[-1])
+                    return (code, round(val, 1))
             except Exception:
                 pass
             return (code, None)
 
         codes_need_fetch = [c for c in all_codes
-                           if existing.get(c, {}).get("outstanding_share", 0) == 0
-                           or refresh]
+                           if refresh
+                           or c not in existing
+                           or existing.get(c, {}).get("outstanding_share", 0) == 0]
         if progress:
             print(f"  待获取 outstanding: {len(codes_need_fetch)} 只")
 
@@ -397,6 +399,8 @@ def update_stock_info_csv(csv_path: Optional[Path] = None,
         name = name_map.get(code, existing.get(code, {}).get("name", "未知"))
         outstanding = outstanding_map.get(
             code, existing.get(code, {}).get("outstanding_share", 0.0))
+        if outstanding:
+            outstanding = round(outstanding, 1)
         old = existing.get(code)
 
         if old is None:
