@@ -253,12 +253,64 @@ def get_all_tdx_codes() -> list[str]:
 
 
 if __name__ == "__main__":
-    import sys
-    code = sys.argv[1] if len(sys.argv) > 1 else "sh600862"
-    days = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    import argparse
+    parser = argparse.ArgumentParser(description="通达信日K线查看器")
+    parser.add_argument("code", nargs="?", default="sh600862", help="股票代码（默认 sh600862）")
+    parser.add_argument("--days", "-d", type=int, default=10, help="天数（默认 10）")
+    parser.add_argument("--all", "-a", action="store_true", help="全市场扫描：列出所有股票最近N天K线")
+    parser.add_argument("--limit", "-l", type=int, default=0, help="配合 --all 使用，最多显示多少只（0=不限）")
+    parser.add_argument("--output", "-o", type=str, default=None, help="输出文件路径（默认打印到终端）")
+    args = parser.parse_args()
 
     t0 = time_module.time()
-    data = print_kline(code, days=days)
+
+    if args.all:
+        all_codes = get_all_tdx_codes()
+        total = len(all_codes)
+        limit = args.limit if args.limit > 0 else total
+        codes_to_show = all_codes[:limit]
+
+        import sys
+        out = open(args.output, "w", encoding="utf-8") if args.output else sys.stdout
+        sep = "=" * 100
+
+        out.write(f"\n{'='*100}\n")
+        out.write(f"  全市场扫描  |  共 {total} 只  |  显示前 {limit} 只  |  每天 {args.days} 根K线\n")
+        out.write(f"{'='*100}\n\n")
+
+        done = 0
+        for code in codes_to_show:
+            try:
+                data = read_tdx_kline(code, days=args.days)
+                if not data:
+                    continue
+                last = data[-1]
+                out.write(f"{sep}\n")
+                out.write(f"  [{done+1:>4}/{limit}] {code}  最近 {len(data)} 天  "
+                          f"| 最新: {last['date']}  收 {last['close']:>8.2f}  "
+                          f"| 高 {last['high']:>8.2f}  低 {last['low']:>8.2f}  "
+                          f"| 成交额 {last['amount']/1e8:>10.2f} 亿\n")
+                out.write(f"{'-'*100}\n")
+                out.write(f"  {'日期':<12} {'开盘':>8} {'最高':>8} {'最低':>8} {'收盘':>8} {'成交量(手)':>12} {'成交额':>14}\n")
+                out.write(f"{'-'*100}\n")
+                for r in data:
+                    out.write(f"  {r['date']:<12} {r['open']:>8.2f} {r['high']:>8.2f} "
+                              f"{r['low']:>8.2f} {r['close']:>8.2f} "
+                              f"{r['volume']:>12.0f} {r['amount']:>14.2f}\n")
+                out.write(f"\n")
+            except Exception:
+                pass
+            done += 1
+            if done % 500 == 0:
+                sys.stderr.write(f"  已处理 {done}/{limit} 只 ...\n")
+                sys.stderr.flush()
+
+        if out is not sys.stdout:
+            out.close()
+            print(f"✅ 已保存到 {args.output}")
+    else:
+        data = print_kline(args.code, days=args.days)
+        if not data:
+            print("⚠️  未获取到数据")
+
     print(f"\n⏱️  耗时: {time_module.time() - t0:.3f}s")
-    if not data:
-        print("⚠️  未获取到数据")
