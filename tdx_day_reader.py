@@ -51,16 +51,31 @@ def _normalize_code(code: str) -> tuple[str, str]:
 
 
 def _find_file(code: str) -> Path:
-    """根据代码找到对应市场的 .day 文件"""
+    """
+    根据代码找到对应市场的 .day 文件。
+    当用户明确指定了 sh/sz 前缀但文件实际在另一个市场目录时，
+    自动回退查找（处理通达信目录里 sh/sz 前缀与数字段不严格对应的情况）。
+    """
     market, pure = _normalize_code(code)
+
+    # 先查对应市场目录
     if market == "sh":
-        day_dir = TDX_DATA_SH_DIR
+        dirs = [TDX_DATA_SH_DIR, TDX_DATA_SZ_DIR]
     else:
-        day_dir = TDX_DATA_SZ_DIR
-    fp = day_dir / f"{market}{pure}.day"
-    if not fp.exists():
-        raise FileNotFoundError(f"找不到数据文件: {fp}")
-    return fp
+        dirs = [TDX_DATA_SZ_DIR, TDX_DATA_SH_DIR]
+
+    for day_dir in dirs:
+        fp = day_dir / f"{market}{pure}.day"
+        if fp.exists():
+            return fp
+
+    # 回退：前缀正确但文件在另一个市场
+    other = "sz" if market == "sh" else "sh"
+    fp = (TDX_DATA_SZ_DIR if other == "sz" else TDX_DATA_SH_DIR) / f"{other}{pure}.day"
+    if fp.exists():
+        return fp
+
+    raise FileNotFoundError(f"找不到数据文件: {code} (尝试过 sh/{market}{pure}.day, sz/{other}{pure}.day)")
 
 
 def _parse_record(chunk: bytes) -> dict:
@@ -160,7 +175,7 @@ def print_kline(code: str, days: int = 10,
     print(f"\n{'='*80}")
     print(f"股票代码: {code}  |  最近 {len(data)} 天  |  截止: {data[-1]['date']}")
     print(f"{'='*80}")
-    print(f"{'日期':<12} {'开盘':>8} {'最高':>8} {'最低':>8} {'收盘':>8} {'成交量(手)':>12} {'成交额':>14}")
+    print(f"{'日期':<8} {'开盘':>8} {'最高':>6} {'最低':>6} {'收盘':>6} {'成交量(手)':>12} {'成交额':>6}")
     print("-" * 80)
     for r in data:
         print(f"{r['date']:<12} {r['open']:>8.2f} {r['high']:>8.2f} {r['low']:>8.2f} "
