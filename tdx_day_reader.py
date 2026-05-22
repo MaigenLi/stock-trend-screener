@@ -321,7 +321,7 @@ def update_stock_info_csv(csv_path: Optional[Path] = None,
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if csv_path is None:
-        csv_path = WORKSPACE / ".cache" / "stock_info.csv"
+        csv_path = STOCK_INFO_CSV
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     # ── 1. 读取已有 CSV ─────────────────────────────────
@@ -475,7 +475,7 @@ def update_stock_info_csv(csv_path: Optional[Path] = None,
 def load_stock_info_csv(csv_path: Optional[Path] = None) -> dict[str, dict]:
     """读取 stock_info.csv，返回 {code: {name, outstanding_share}}"""
     if csv_path is None:
-        csv_path = WORKSPACE / ".cache" / "stock_info.csv"
+        csv_path = STOCK_INFO_CSV
     result: dict[str, dict] = {}
     if not csv_path.exists():
         return result
