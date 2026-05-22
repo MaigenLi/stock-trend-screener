@@ -107,8 +107,8 @@ def _load_all_records(file_path: Path) -> list:
     return records
 
 
-def _filter_by_date(records: list, end_date, days: Optional[int]) -> list:
-    """按截止日期和数量过滤记录"""
+def _filter_by_date(records: list, end_date, days: Optional[int], outstanding_share: Optional[float] = None) -> list[dict]:
+    """按截止日期和数量过滤记录，可选计算换手率 true_turnover = volume / outstanding_share * 100"""
     if end_date is None or end_date == "today":
         end_dt = datetime.datetime.now()
     elif isinstance(end_date, str):
@@ -125,7 +125,7 @@ def _filter_by_date(records: list, end_date, days: Optional[int]) -> list:
 
     result = []
     for r in filtered:
-        result.append({
+        rec = {
             'date':   r['date'].strftime('%Y-%m-%d'),
             'open':   round(r['open'], 2),
             'high':   round(r['high'], 2),
@@ -133,7 +133,12 @@ def _filter_by_date(records: list, end_date, days: Optional[int]) -> list:
             'close':  round(r['close'], 2),
             'volume': round(r['volume'], 0),
             'amount': round(r['amount'], 2),
-        })
+        }
+        if outstanding_share and outstanding_share > 0:
+            # volume 存储时已经 ÷100（TDX .day 文件 volume 字段单位是 hand×100）
+            # 换手率 = (volume×100) / outstanding_share * 100
+            rec['true_turnover'] = round(r['volume'] * 100 / outstanding_share * 100, 2)
+        result.append(rec)
     return result
 
 
@@ -143,6 +148,7 @@ def read_tdx_kline(
     code: str,
     days: Optional[int] = None,
     end_date: Optional[Literal["today"] | str | datetime.date] = None,
+    outstanding_share: Optional[float] = None,
 ) -> list[dict]:
     """
     读取通达信日K线数据
@@ -155,15 +161,18 @@ def read_tdx_kline(
         获取最近多少天（从 end_date 往前算），不指定则返回全部
     end_date : str or date, optional
         截止日期，默认为今天
+    outstanding_share : float, optional
+        流通股本（股），用于计算换手率 true_turnover = volume / outstanding_share * 100
 
     Returns
     -------
     list[dict]
         每条: date, open, high, low, close, volume, amount（升序）
+        当 outstanding_share > 0 时，额外包含 true_turnover（换手率%）
     """
     fp = _find_file(code)
     all_records = _load_all_records(fp)
-    return _filter_by_date(all_records, end_date, days)
+    return _filter_by_date(all_records, end_date, days, outstanding_share)
 
 
 def print_kline(code: str, days: int = 10,
@@ -177,7 +186,7 @@ def print_kline(code: str, days: int = 10,
     print(f"\n{'='*80}")
     print(f"股票代码: {code}  |  最近 {len(data)} 天  |  截止: {data[-1]['date']}")
     print(f"{'='*80}")
-    print(f"{'日期':<12} {'开盘':>8} {'最高':>8} {'最低':>8} {'收盘':>8} {'成交量(手)':>12} {'成交额':>14}")
+    print(f"{'日期':<10} {'开盘':>6} {'最高':>6} {'最低':>6} {'收盘':>6} {'成交量(手)':>8} {'成交额':>10}")
     print("-" * 80)
     for r in data:
         print(f"{r['date']:<12} {r['open']:>8.2f} {r['high']:>8.2f} {r['low']:>8.2f} "
@@ -506,7 +515,7 @@ if __name__ == "__main__":
                           f"| 高 {last['high']:>8.2f}  低 {last['low']:>8.2f}  "
                           f"| 成交额 {last['amount']/1e8:>10.2f} 亿\n")
                 out.write(f"{'-'*100}\n")
-                out.write(f"  {'日期':<12} {'开盘':>8} {'最高':>8} {'最低':>8} {'收盘':>8} {'成交量(手)':>12} {'成交额':>14}\n")
+                out.write(f"  {'日期':<10} {'开盘':>6} {'最高':>6} {'最低':>6} {'收盘':>6} {'成交量(手)':>8} {'成交额':>10}\n")
                 out.write(f"{'-'*100}\n")
                 for r in data:
                     out.write(f"  {r['date']:<12} {r['open']:>8.2f} {r['high']:>8.2f} "
