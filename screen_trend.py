@@ -641,7 +641,7 @@ def _check_limitup_conditions(df: pd.DataFrame, signal_date: str = None, code: s
 
     # ── 涨停判断 ──
     code_check = (code or "").lower()
-    if code_check.startswith(("sz300", "sh688", "300", "688")):
+    if code_check.startswith(("sz30", "sh68", "30", "68")):
         limit_ratio = 0.20
     else:
         limit_ratio = 0.10
@@ -1056,7 +1056,7 @@ def check_limitup_channel(df: pd.DataFrame, signal_date: str = None, code: str =
     # 根据代码前缀判断板块
     # code 可能是纯码(如300263)或带前缀(如sz300263)，统一取纯码判断
     code_check = code.lower() if code else ""
-    if code_check.startswith(("sz300", "sh688", "300", "688")):
+    if code_check.startswith(("sz30", "sh68", "30", "68")):
         limit_ratio = 0.20   # 创业板 / 科创板
     else:
         limit_ratio = 0.10   # 主板 / 北交所

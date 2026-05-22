@@ -24,8 +24,8 @@ sleep 60
 #echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_qfq_daily.py --date ${DATE} --refresh"
 #${PYTHON} ${WORKSPACE}/cache_qfq_daily.py --date ${DATE} --refresh >> ${LOG_DIR}/qfq_cache.log 2>&1
 sleep 60
-echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_raw_daily.py --date ${DATE} --refresh --refresh-list"
-${PYTHON} ${WORKSPACE}/cache_raw_daily.py --date ${DATE} --refresh --refresh-list >> ${LOG_DIR}/raw_cache.log 2>&1
+echo "[$(date '+%H:%M:%S')] 步骤2/8: cache_raw_daily.py --date ${DATE} --refresh"
+${PYTHON} ${WORKSPACE}/cache_raw_daily.py --date ${DATE} --refresh >> ${LOG_DIR}/raw_cache.log 2>&1
 echo "[$(date '+%H:%M:%S')] 步骤2完成，休息60秒..."
 sleep 60
 
@@ -55,7 +55,7 @@ sleep 60
 
 # 步骤7：选股筛选
 echo "[$(date '+%H:%M:%S')] 步骤7/8: screen_trend.py --date ${DATE}"
-${PYTHON} ${WORKSPACE}/screen_trend.py --date ${DATE} 
+#${PYTHON} ${WORKSPACE}/screen_trend.py --date ${DATE} 
 echo "[$(date '+%H:%M:%S')] 步骤7完成，休息60秒..."
 sleep 60 
 
